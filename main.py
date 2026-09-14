@@ -27,13 +27,24 @@ class WelcomeBot(commands.Bot):
         )
 
     async def setup_hook(self):
+        # Welcome
         await self.load_extension("cogs.welcome")
+
+        # Leave
+        await self.load_extension("cogs.leave")
 
         try:
             synced = await self.tree.sync()
-            logger.info("Synced %s slash commands.", len(synced))
+
+            logger.info(
+                "Synced %s slash commands.",
+                len(synced)
+            )
+
         except Exception:
-            logger.exception("Failed to sync slash commands.")
+            logger.exception(
+                "Failed to sync slash commands."
+            )
 
     async def on_ready(self):
         logger.info(
@@ -57,8 +68,11 @@ def main():
 
     try:
         bot.run(token)
+
     except Exception:
-        logger.exception("Bot stopped unexpectedly.")
+        logger.exception(
+            "Bot stopped unexpectedly."
+        )
 
 
 if __name__ == "__main__":
