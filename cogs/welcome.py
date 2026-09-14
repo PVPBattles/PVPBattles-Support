@@ -9,51 +9,21 @@ class Welcome(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def get_welcome_channel_id(self, guild_id: int):
-        config = get_guild_config(guild_id)
-        return config.get("welcome_channel_id")
+    def get_channel(self, guild: discord.Guild):
+        config = get_guild_config(guild.id)
+        channel_id = config.get("welcome_channel_id")
 
-    def create_welcome_embed(
-        self,
-        member: discord.Member
-    ) -> discord.Embed:
-        guild = member.guild
+        if not channel_id:
+            return None
 
-        embed = discord.Embed(
-            title="👋 Welcome!",
-            description=(
-                f"Welcome to **{guild.name}**, {member.mention}!\n\n"
-                "We're glad to have you here!"
-            ),
-            color=discord.Color.blurple()
-        )
-
-        embed.set_thumbnail(url=member.display_avatar.url)
-
-        embed.add_field(
-            name="👤 Member",
-            value=member.mention,
-            inline=True
-        )
-
-        embed.add_field(
-            name="👥 Members",
-            value=str(guild.member_count),
-            inline=True
-        )
-
-        embed.set_footer(
-            text=f"{guild.name} • Welcome"
-        )
-
-        return embed
+        return guild.get_channel(channel_id)
 
     @app_commands.command(
         name="welcome-setup",
-        description="Set the channel for welcome messages."
+        description="Set the welcome notification channel."
     )
     @app_commands.describe(
-        channel="The channel where welcome messages will be sent."
+        channel="The channel for welcome notifications."
     )
     @app_commands.default_permissions(manage_guild=True)
     async def welcome_setup(
@@ -74,22 +44,15 @@ class Welcome(commands.Cog):
             channel.id
         )
 
-        embed = discord.Embed(
-            title="✅ Welcome Setup Complete",
-            description=(
-                f"Welcome messages will now be sent to {channel.mention}."
-            ),
-            color=discord.Color.green()
-        )
-
         await interaction.response.send_message(
-            embed=embed,
+            f"✅ Welcome notifications will be sent to "
+            f"{channel.mention}.",
             ephemeral=True
         )
 
     @app_commands.command(
         name="welcome-disable",
-        description="Disable welcome messages."
+        description="Disable welcome notifications."
     )
     @app_commands.default_permissions(manage_guild=True)
     async def welcome_disable(
@@ -109,20 +72,14 @@ class Welcome(commands.Cog):
             None
         )
 
-        embed = discord.Embed(
-            title="✅ Welcome Disabled",
-            description="Welcome messages have been disabled.",
-            color=discord.Color.red()
-        )
-
         await interaction.response.send_message(
-            embed=embed,
+            "✅ Welcome notifications have been disabled.",
             ephemeral=True
         )
 
     @app_commands.command(
         name="welcome-test",
-        description="Send a test welcome message."
+        description="Send a test welcome notification."
     )
     @app_commands.default_permissions(manage_guild=True)
     async def welcome_test(
@@ -136,33 +93,22 @@ class Welcome(commands.Cog):
             )
             return
 
-        channel_id = self.get_welcome_channel_id(
-            interaction.guild.id
-        )
+        channel = self.get_channel(interaction.guild)
 
-        if not channel_id:
+        if channel is None:
             await interaction.response.send_message(
-                "❌ Welcome messages are not configured yet.\n"
+                "❌ Welcome channel is not configured.\n"
                 "Use `/welcome-setup` first.",
                 ephemeral=True
             )
             return
 
-        channel = interaction.guild.get_channel(channel_id)
-
-        if channel is None:
-            await interaction.response.send_message(
-                "❌ The configured welcome channel no longer exists.\n"
-                "Please use `/welcome-setup` again.",
-                ephemeral=True
-            )
-            return
-
         embed = discord.Embed(
-            title="👋 Welcome Test",
+            title="🧪 Welcome Test",
             description=(
-                f"This is a test welcome message from "
-                f"**{interaction.guild.name}**!"
+                f"Welcome to **{interaction.guild.name}**, "
+                f"{interaction.user.mention}!\n\n"
+                "This is a test welcome notification."
             ),
             color=discord.Color.blurple()
         )
@@ -172,7 +118,7 @@ class Welcome(commands.Cog):
         )
 
         embed.add_field(
-            name="👤 User",
+            name="👤 Member",
             value=interaction.user.mention,
             inline=True
         )
@@ -184,14 +130,17 @@ class Welcome(commands.Cog):
         )
 
         embed.set_footer(
-            text="Welcome system test"
+            text=f"{interaction.guild.name} • Welcome"
         )
 
         try:
-            await channel.send(embed=embed)
+            await channel.send(
+                content=interaction.user.mention,
+                embed=embed
+            )
 
             await interaction.response.send_message(
-                f"✅ Test message sent to {channel.mention}.",
+                f"✅ Test notification sent to {channel.mention}.",
                 ephemeral=True
             )
 
@@ -204,7 +153,7 @@ class Welcome(commands.Cog):
 
         except discord.HTTPException:
             await interaction.response.send_message(
-                "❌ Failed to send the test message.",
+                "❌ Failed to send the notification.",
                 ephemeral=True
             )
 
@@ -213,19 +162,40 @@ class Welcome(commands.Cog):
         self,
         member: discord.Member
     ):
-        channel_id = self.get_welcome_channel_id(
-            member.guild.id
-        )
-
-        if not channel_id:
-            return
-
-        channel = member.guild.get_channel(channel_id)
+        channel = self.get_channel(member.guild)
 
         if channel is None:
             return
 
-        embed = self.create_welcome_embed(member)
+        embed = discord.Embed(
+            title="👋 Welcome!",
+            description=(
+                f"Welcome to **{member.guild.name}**, "
+                f"{member.mention}!\n\n"
+                "We're glad to have you here!"
+            ),
+            color=discord.Color.blurple()
+        )
+
+        embed.set_thumbnail(
+            url=member.display_avatar.url
+        )
+
+        embed.add_field(
+            name="👤 Member",
+            value=member.mention,
+            inline=True
+        )
+
+        embed.add_field(
+            name="👥 Members",
+            value=str(member.guild.member_count),
+            inline=True
+        )
+
+        embed.set_footer(
+            text=f"{member.guild.name} • Welcome"
+        )
 
         try:
             await channel.send(
@@ -233,10 +203,10 @@ class Welcome(commands.Cog):
                 embed=embed
             )
 
-        except discord.Forbidden:
-            pass
-
-        except discord.HTTPException:
+        except (
+            discord.Forbidden,
+            discord.HTTPException
+        ):
             pass
 
 
