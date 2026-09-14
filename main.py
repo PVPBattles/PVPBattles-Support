@@ -7,18 +7,32 @@ from discord.ext import commands
 from keep_alive import start_keep_alive
 
 
+# =========================
+# Logging
+# =========================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
-logger = logging.getLogger("welcome_bot")
+logger = logging.getLogger("mcid_bot")
 
 
-class WelcomeBot(commands.Bot):
+# =========================
+# Bot
+# =========================
+
+class MCIDBot(commands.Bot):
+
     def __init__(self):
         intents = discord.Intents.default()
+
+        # メンバー情報
         intents.members = True
+
+        # メッセージ内容を読むために必要
+        intents.message_content = True
 
         super().__init__(
             command_prefix="!",
@@ -27,11 +41,15 @@ class WelcomeBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        # Welcome
-        await self.load_extension("cogs.welcome")
 
-        # Leave
-        await self.load_extension("cogs.leave")
+        # MCID機能
+        await self.load_extension("cogs.mcid")
+
+        logger.info("Loaded cogs.mcid")
+
+        # =========================
+        # Slash Commands Sync
+        # =========================
 
         try:
             synced = await self.tree.sync()
@@ -41,20 +59,37 @@ class WelcomeBot(commands.Bot):
                 len(synced)
             )
 
+            for command in synced:
+                logger.info(
+                    "Registered command: /%s",
+                    command.name
+                )
+
         except Exception:
             logger.exception(
                 "Failed to sync slash commands."
             )
 
     async def on_ready(self):
+
         logger.info(
             "Logged in as %s (ID: %s)",
             self.user,
             self.user.id
         )
 
+        logger.info(
+            "Connected to %s server(s).",
+            len(self.guilds)
+        )
+
+
+# =========================
+# Main
+# =========================
 
 def main():
+
     token = os.getenv("DISCORD_TOKEN")
 
     if not token:
@@ -62,9 +97,10 @@ def main():
             "DISCORD_TOKEN environment variable is not set."
         )
 
+    # Render用
     start_keep_alive()
 
-    bot = WelcomeBot()
+    bot = MCIDBot()
 
     try:
         bot.run(token)
