@@ -7,31 +7,23 @@ from discord.ext import commands
 from keep_alive import start_keep_alive
 
 
-# =========================
-# Logging
-# =========================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
-logger = logging.getLogger("mcid_bot")
+logger = logging.getLogger("discord_bot")
 
 
-# =========================
-# Bot
-# =========================
-
-class MCIDBot(commands.Bot):
+class DiscordBot(commands.Bot):
 
     def __init__(self):
         intents = discord.Intents.default()
 
-        # メンバー情報
+        # メンバー参加・退出
         intents.members = True
 
-        # メッセージ内容を読むために必要
+        # メッセージ内容を読む
         intents.message_content = True
 
         super().__init__(
@@ -42,13 +34,21 @@ class MCIDBot(commands.Bot):
 
     async def setup_hook(self):
 
-        # MCID機能
-        await self.load_extension("cogs.mcid")
+        # =========================
+        # Cogs
+        # =========================
 
+        await self.load_extension("cogs.welcome")
+        logger.info("Loaded cogs.welcome")
+
+        await self.load_extension("cogs.leave")
+        logger.info("Loaded cogs.leave")
+
+        await self.load_extension("cogs.mcid")
         logger.info("Loaded cogs.mcid")
 
         # =========================
-        # Slash Commands Sync
+        # Slash Commands
         # =========================
 
         try:
@@ -84,10 +84,6 @@ class MCIDBot(commands.Bot):
         )
 
 
-# =========================
-# Main
-# =========================
-
 def main():
 
     token = os.getenv("DISCORD_TOKEN")
@@ -100,7 +96,7 @@ def main():
     # Render用
     start_keep_alive()
 
-    bot = MCIDBot()
+    bot = DiscordBot()
 
     try:
         bot.run(token)
