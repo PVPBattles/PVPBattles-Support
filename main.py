@@ -20,10 +20,7 @@ class DiscordBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
 
-        # メンバー参加・退出
         intents.members = True
-
-        # メッセージ内容を読む
         intents.message_content = True
 
         super().__init__(
@@ -34,36 +31,105 @@ class DiscordBot(commands.Bot):
 
     async def setup_hook(self):
 
-        # =========================
-        # Cogs
-        # =========================
+        # ========================================
+        # Load Cogs
+        # ========================================
 
-        await self.load_extension("cogs.welcome")
-        logger.info("Loaded cogs.welcome")
+        extensions = [
+            "cogs.welcome",
+            "cogs.leave",
+            "cogs.mcid",
+            "cogs.rule"
+        ]
 
-        await self.load_extension("cogs.leave")
-        logger.info("Loaded cogs.leave")
+        for extension in extensions:
+            try:
+                await self.load_extension(extension)
+                logger.info(
+                    "Loaded %s",
+                    extension
+                )
 
-        await self.load_extension("cogs.mcid")
-        logger.info("Loaded cogs.mcid")
+            except Exception:
+                logger.exception(
+                    "Failed to load %s",
+                    extension
+                )
 
-        # =========================
-        # Slash Commands
-        # =========================
+        # ========================================
+        # Persistent Verification Button
+        # ========================================
 
         try:
-            synced = await self.tree.sync()
+            from cogs.rule import VerifyView
 
-            logger.info(
-                "Synced %s slash commands.",
-                len(synced)
+            self.add_view(
+                VerifyView()
             )
 
-            for command in synced:
-                logger.info(
-                    "Registered command: /%s",
-                    command.name
+            logger.info(
+                "Registered persistent VerifyView."
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to register VerifyView."
+            )
+
+        # ========================================
+        # Slash Command Sync
+        # ========================================
+
+        guild_id = os.getenv("GUILD_ID")
+
+        try:
+
+            # ----------------------------------------
+            # GUILD_ID が設定されている場合
+            # → そのサーバーへ即時同期
+            # ----------------------------------------
+
+            if guild_id:
+
+                guild = discord.Object(
+                    id=int(guild_id)
                 )
+
+                synced = await self.tree.sync(
+                    guild=guild
+                )
+
+                logger.info(
+                    "Synced %s slash commands to guild %s.",
+                    len(synced),
+                    guild_id
+                )
+
+                for command in synced:
+                    logger.info(
+                        "Registered guild command: /%s",
+                        command.name
+                    )
+
+            # ----------------------------------------
+            # GUILD_ID がない場合
+            # → グローバル同期
+            # ----------------------------------------
+
+            else:
+
+                synced = await self.tree.sync()
+
+                logger.info(
+                    "Synced %s global slash commands.",
+                    len(synced)
+                )
+
+                for command in synced:
+                    logger.info(
+                        "Registered global command: /%s",
+                        command.name
+                    )
 
         except Exception:
             logger.exception(
@@ -86,14 +152,16 @@ class DiscordBot(commands.Bot):
 
 def main():
 
-    token = os.getenv("DISCORD_TOKEN")
+    token = os.getenv(
+        "DISCORD_TOKEN"
+    )
 
     if not token:
         raise RuntimeError(
             "DISCORD_TOKEN environment variable is not set."
         )
 
-    # Render用
+    # Keep Alive
     start_keep_alive()
 
     bot = DiscordBot()
