@@ -45,6 +45,7 @@ class DiscordBot(commands.Bot):
         for extension in extensions:
             try:
                 await self.load_extension(extension)
+
                 logger.info(
                     "Loaded %s",
                     extension
@@ -57,7 +58,7 @@ class DiscordBot(commands.Bot):
                 )
 
         # ========================================
-        # Persistent Verification Button
+        # Persistent Verify Button
         # ========================================
 
         try:
@@ -84,15 +85,15 @@ class DiscordBot(commands.Bot):
 
         try:
 
-            # ----------------------------------------
-            # GUILD_ID が設定されている場合
-            # → そのサーバーへ即時同期
-            # ----------------------------------------
-
             if guild_id:
 
                 guild = discord.Object(
                     id=int(guild_id)
+                )
+
+                # Copy all global commands to this guild
+                self.tree.copy_global_to(
+                    guild=guild
                 )
 
                 synced = await self.tree.sync(
@@ -107,14 +108,9 @@ class DiscordBot(commands.Bot):
 
                 for command in synced:
                     logger.info(
-                        "Registered guild command: /%s",
+                        "Guild command: /%s",
                         command.name
                     )
-
-            # ----------------------------------------
-            # GUILD_ID がない場合
-            # → グローバル同期
-            # ----------------------------------------
 
             else:
 
@@ -127,7 +123,7 @@ class DiscordBot(commands.Bot):
 
                 for command in synced:
                     logger.info(
-                        "Registered global command: /%s",
+                        "Global command: /%s",
                         command.name
                     )
 
@@ -135,6 +131,7 @@ class DiscordBot(commands.Bot):
             logger.exception(
                 "Failed to sync slash commands."
             )
+
 
     async def on_ready(self):
 
@@ -161,15 +158,26 @@ def main():
             "DISCORD_TOKEN environment variable is not set."
         )
 
+    # ========================================
     # Keep Alive
+    # ========================================
+
     start_keep_alive()
+
+    # ========================================
+    # Start Bot
+    # ========================================
 
     bot = DiscordBot()
 
     try:
-        bot.run(token)
+
+        bot.run(
+            token
+        )
 
     except Exception:
+
         logger.exception(
             "Bot stopped unexpectedly."
         )
