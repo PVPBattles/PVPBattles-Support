@@ -1,8 +1,13 @@
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from storage import get_guild_config, set_guild_value
+
+
+logger = logging.getLogger("discord_bot")
 
 
 class RuleEditModal(discord.ui.Modal, title="Edit Rules"):
@@ -21,6 +26,7 @@ class RuleEditModal(discord.ui.Modal, title="Edit Rules"):
         self.guild_id = guild_id
 
         config = get_guild_config(guild_id)
+
         current_rules = config.get("rule_text")
 
         if current_rules:
@@ -107,7 +113,7 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
-        # Check bot role hierarchy
+        # Get bot member
         bot_member = interaction.guild.me
 
         if bot_member is None:
@@ -117,6 +123,7 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
+        # Check role hierarchy
         if role >= bot_member.top_role:
             await interaction.response.send_message(
                 "❌ I cannot give you this role.\n"
@@ -125,29 +132,47 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
-        # Give verification role
+        # Give role
         try:
+
             await member.add_roles(
                 role,
                 reason="Rule verification"
             )
 
         except discord.Forbidden:
+
+            logger.exception(
+                "Forbidden while giving verification role "
+                "in guild %s to user %s",
+                interaction.guild.id,
+                member.id
+            )
+
             await interaction.response.send_message(
                 "❌ I could not give you the verification role.\n"
                 "Please make sure the bot has the Manage Roles permission.",
                 ephemeral=True
             )
+
             return
 
         except discord.HTTPException:
+
+            logger.exception(
+                "HTTP error while giving verification role "
+                "in guild %s to user %s",
+                interaction.guild.id,
+                member.id
+            )
+
             await interaction.response.send_message(
                 "❌ Verification failed. Please try again.",
                 ephemeral=True
             )
+
             return
 
-        # Verification successful
         await interaction.response.send_message(
             "🔓️ **You are now Verified!**\n"
             "You now have access to the server.",
@@ -208,11 +233,13 @@ class Rule(commands.Cog):
         if bot_member is not None:
 
             if role >= bot_member.top_role:
+
                 await interaction.response.send_message(
                     "❌ I cannot give users this role.\n"
                     "Please move the bot's role above the verification role.",
                     ephemeral=True
                 )
+
                 return
 
         set_guild_value(
@@ -301,56 +328,138 @@ class Rule(commands.Cog):
             "rule_text"
         )
 
-        # Channel check
+        # ----------------------------------------
+        # Check channel
+        # ----------------------------------------
+
         if not channel_id:
+
             await interaction.response.send_message(
                 "❌ The rule channel has not been configured.\n"
                 "Use `/rule-setup` first.",
                 ephemeral=True
             )
+
             return
 
-        # Role check
+        # ----------------------------------------
+        # Check role
+        # ----------------------------------------
+
         if not role_id:
+
             await interaction.response.send_message(
                 "❌ The verification role has not been configured.\n"
                 "Use `/rule-setup` first.",
                 ephemeral=True
             )
+
             return
 
-        # Rules check
+        # ----------------------------------------
+        # Check rules
+        # ----------------------------------------
+
         if not rules:
+
             await interaction.response.send_message(
                 "❌ The rules have not been configured.\n"
                 "Use `/rule-edit` first.",
                 ephemeral=True
             )
+
             return
+
+        # ----------------------------------------
+        # Get channel
+        # ----------------------------------------
 
         channel = interaction.guild.get_channel(
             channel_id
         )
 
         if channel is None:
+
             await interaction.response.send_message(
                 "❌ The configured rule channel could not be found.",
                 ephemeral=True
             )
+
             return
+
+        # ----------------------------------------
+        # Get role
+        # ----------------------------------------
 
         role = interaction.guild.get_role(
             role_id
         )
 
         if role is None:
+
             await interaction.response.send_message(
                 "❌ The configured verification role could not be found.",
                 ephemeral=True
             )
+
             return
 
-        # Rule Embed
+        # ----------------------------------------
+        # Check bot permissions
+        # ----------------------------------------
+
+        bot_member = interaction.guild.me
+
+        if bot_member is None:
+
+            await interaction.response.send_message(
+                "❌ Could not retrieve the bot information.",
+                ephemeral=True
+            )
+
+            return
+
+        permissions = channel.permissions_for(
+            bot_member
+        )
+
+        missing_permissions = []
+
+        if not permissions.view_channel:
+            missing_permissions.append(
+                "View Channel"
+            )
+
+        if not permissions.send_messages:
+            missing_permissions.append(
+                "Send Messages"
+            )
+
+        if not permissions.embed_links:
+            missing_permissions.append(
+                "Embed Links"
+            )
+
+        if missing_permissions:
+
+            missing = "\n".join(
+                f"• {permission}"
+                for permission in missing_permissions
+            )
+
+            await interaction.response.send_message(
+                "❌ I don't have the required permissions "
+                "in the rule channel.\n\n"
+                f"{missing}",
+                ephemeral=True
+            )
+
+            return
+
+        # ----------------------------------------
+        # Create embed
+        # ----------------------------------------
+
         embed = discord.Embed(
             title="🔒️ Server Rules",
             description=rules,
@@ -361,6 +470,10 @@ class Rule(commands.Cog):
             text=f"{interaction.guild.name} • Verification"
         )
 
+        # ----------------------------------------
+        # Send panel
+        # ----------------------------------------
+
         try:
 
             await channel.send(
@@ -368,25 +481,66 @@ class Rule(commands.Cog):
                 view=VerifyView()
             )
 
-            await interaction.response.send_message(
-                f"✅ Rule panel sent to {channel.mention}.",
-                ephemeral=True
-            )
-
         except discord.Forbidden:
 
+            logger.exception(
+                "Forbidden while sending rule panel "
+                "in guild %s / channel %s",
+                interaction.guild.id,
+                channel.id
+            )
+
             await interaction.response.send_message(
-                "❌ I don't have permission to send messages "
-                "in that channel.",
+                "❌ Discord rejected the message.\n"
+                "Please check the bot's permissions in the rule channel.",
                 ephemeral=True
             )
 
-        except discord.HTTPException:
+            return
+
+        except discord.HTTPException as e:
+
+            logger.exception(
+                "HTTPException while sending rule panel "
+                "in guild %s / channel %s: %s",
+                interaction.guild.id,
+                channel.id,
+                e
+            )
 
             await interaction.response.send_message(
-                "❌ Failed to send the rule panel.",
+                f"❌ Failed to send the rule panel.\n"
+                f"Discord error: `{e}`",
                 ephemeral=True
             )
+
+            return
+
+        except Exception as e:
+
+            logger.exception(
+                "Unexpected error while sending rule panel "
+                "in guild %s / channel %s",
+                interaction.guild.id,
+                channel.id
+            )
+
+            await interaction.response.send_message(
+                "❌ An unexpected error occurred.\n"
+                f"`{type(e).__name__}: {e}`",
+                ephemeral=True
+            )
+
+            return
+
+        # ----------------------------------------
+        # Success
+        # ----------------------------------------
+
+        await interaction.response.send_message(
+            f"✅ Rule panel sent to {channel.mention}.",
+            ephemeral=True
+        )
 
     # ========================================
     # /rule-disable
@@ -439,4 +593,4 @@ async def setup(
 ):
     await bot.add_cog(
         Rule(bot)
-  )
+    )
