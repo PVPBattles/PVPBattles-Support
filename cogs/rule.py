@@ -10,6 +10,10 @@ from storage import get_guild_config, set_guild_value
 logger = logging.getLogger("discord_bot")
 
 
+# =========================================================
+# Rule Edit Modal
+# =========================================================
+
 class RuleEditModal(discord.ui.Modal, title="Edit Rules"):
 
     rules = discord.ui.TextInput(
@@ -47,6 +51,10 @@ class RuleEditModal(discord.ui.Modal, title="Edit Rules"):
             ephemeral=True
         )
 
+
+# =========================================================
+# Verify Button
+# =========================================================
 
 class VerifyButton(discord.ui.Button):
 
@@ -121,7 +129,7 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
-        # Check role hierarchy
+        # Role hierarchy check
         if role >= bot_member.top_role:
             await interaction.response.send_message(
                 "❌ I cannot give you this role.\n"
@@ -130,7 +138,6 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
-        # Give verification role
         try:
             await member.add_roles(
                 role,
@@ -152,13 +159,16 @@ class VerifyButton(discord.ui.Button):
             )
             return
 
-        # Success
         await interaction.response.send_message(
             "🔓 **You are now Verified!**\n"
             "You now have access to the server.",
             ephemeral=True
         )
 
+
+# =========================================================
+# Persistent Verify View
+# =========================================================
 
 class VerifyView(discord.ui.View):
 
@@ -172,6 +182,10 @@ class VerifyView(discord.ui.View):
         )
 
 
+# =========================================================
+# Rule Cog
+# =========================================================
+
 class Rule(commands.Cog):
 
     def __init__(
@@ -180,9 +194,9 @@ class Rule(commands.Cog):
     ):
         self.bot = bot
 
-    # ========================================
+    # =====================================================
     # /rule-setup
-    # ========================================
+    # =====================================================
 
     @app_commands.command(
         name="rule-setup",
@@ -239,9 +253,9 @@ class Rule(commands.Cog):
             ephemeral=True
         )
 
-    # ========================================
+    # =====================================================
     # /rule-edit
-    # ========================================
+    # =====================================================
 
     @app_commands.command(
         name="rule-edit",
@@ -267,9 +281,9 @@ class Rule(commands.Cog):
             )
         )
 
-    # ========================================
+    # =====================================================
     # /rule
-    # ========================================
+    # =====================================================
 
     @app_commands.command(
         name="rule",
@@ -305,6 +319,10 @@ class Rule(commands.Cog):
             "rule_text"
         )
 
+        # -------------------------------------------------
+        # Channel check
+        # -------------------------------------------------
+
         if not channel_id:
             await interaction.response.send_message(
                 "❌ The rule channel has not been configured.\n"
@@ -312,6 +330,10 @@ class Rule(commands.Cog):
                 ephemeral=True
             )
             return
+
+        # -------------------------------------------------
+        # Role check
+        # -------------------------------------------------
 
         if not role_id:
             await interaction.response.send_message(
@@ -321,6 +343,10 @@ class Rule(commands.Cog):
             )
             return
 
+        # -------------------------------------------------
+        # Rules check
+        # -------------------------------------------------
+
         if not rules:
             await interaction.response.send_message(
                 "❌ The rules have not been configured.\n"
@@ -328,6 +354,10 @@ class Rule(commands.Cog):
                 ephemeral=True
             )
             return
+
+        # -------------------------------------------------
+        # Get channel
+        # -------------------------------------------------
 
         channel = interaction.guild.get_channel(
             channel_id
@@ -340,6 +370,10 @@ class Rule(commands.Cog):
             )
             return
 
+        # -------------------------------------------------
+        # Get role
+        # -------------------------------------------------
+
         role = interaction.guild.get_role(
             role_id
         )
@@ -351,6 +385,10 @@ class Rule(commands.Cog):
             )
             return
 
+        # -------------------------------------------------
+        # Bot member
+        # -------------------------------------------------
+
         bot_member = interaction.guild.me
 
         if bot_member is None:
@@ -359,6 +397,10 @@ class Rule(commands.Cog):
                 ephemeral=True
             )
             return
+
+        # -------------------------------------------------
+        # Permission check
+        # -------------------------------------------------
 
         permissions = channel.permissions_for(
             bot_member
@@ -381,6 +423,11 @@ class Rule(commands.Cog):
                 "Embed Links"
             )
 
+        if not permissions.manage_roles:
+            missing_permissions.append(
+                "Manage Roles"
+            )
+
         if missing_permissions:
             missing = "\n".join(
                 f"• {permission}"
@@ -395,9 +442,9 @@ class Rule(commands.Cog):
             )
             return
 
-        # ========================================
-        # Rule Embed
-        # ========================================
+        # -------------------------------------------------
+        # Create embed
+        # -------------------------------------------------
 
         embed = discord.Embed(
             title="🔒 Server Rules",
@@ -409,9 +456,9 @@ class Rule(commands.Cog):
             text=f"{interaction.guild.name} • Verification"
         )
 
-        # ========================================
-        # Send Panel
-        # ========================================
+        # -------------------------------------------------
+        # Send panel
+        # -------------------------------------------------
 
         try:
             await channel.send(
@@ -444,7 +491,7 @@ class Rule(commands.Cog):
             )
 
             await interaction.response.send_message(
-                f"❌ Failed to send the rule panel.\n"
+                "❌ Failed to send the rule panel.\n"
                 f"Discord error: `{e}`",
                 ephemeral=True
             )
@@ -470,9 +517,9 @@ class Rule(commands.Cog):
             ephemeral=True
         )
 
-    # ========================================
+    # =====================================================
     # /rule-disable
-    # ========================================
+    # =====================================================
 
     @app_commands.command(
         name="rule-disable",
@@ -492,4 +539,37 @@ class Rule(commands.Cog):
             )
             return
 
-       
+        set_guild_value(
+            interaction.guild.id,
+            "rule_channel_id",
+            None
+        )
+
+        set_guild_value(
+            interaction.guild.id,
+            "rule_role_id",
+            None
+        )
+
+        set_guild_value(
+            interaction.guild.id,
+            "rule_text",
+            None
+        )
+
+        await interaction.response.send_message(
+            "✅ Rule verification has been disabled.",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# Extension Setup
+# =========================================================
+
+async def setup(
+    bot: commands.Bot
+):
+    await bot.add_cog(
+        Rule(bot)
+    )
