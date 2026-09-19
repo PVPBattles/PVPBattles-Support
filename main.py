@@ -39,7 +39,8 @@ class DiscordBot(commands.Bot):
             "cogs.welcome",
             "cogs.leave",
             "cogs.mcid",
-            "cogs.rule"
+            "cogs.rule",
+            "cogs.ticket"
         ]
 
         for extension in extensions:
@@ -58,7 +59,7 @@ class DiscordBot(commands.Bot):
                 )
 
         # ========================================
-        # Persistent Verify Button
+        # Persistent Rule View
         # ========================================
 
         try:
@@ -78,6 +79,33 @@ class DiscordBot(commands.Bot):
             )
 
         # ========================================
+        # Persistent Ticket Views
+        # ========================================
+
+        try:
+            from cogs.ticket import (
+                TicketPanelView,
+                TicketCloseView
+            )
+
+            self.add_view(
+                TicketPanelView()
+            )
+
+            self.add_view(
+                TicketCloseView()
+            )
+
+            logger.info(
+                "Registered persistent Ticket views."
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to register Ticket views."
+            )
+
+        # ========================================
         # Slash Command Sync
         # ========================================
 
@@ -91,7 +119,6 @@ class DiscordBot(commands.Bot):
                     id=int(guild_id)
                 )
 
-                # Copy all global commands to this guild
                 self.tree.copy_global_to(
                     guild=guild
                 )
@@ -132,7 +159,6 @@ class DiscordBot(commands.Bot):
                 "Failed to sync slash commands."
             )
 
-
     async def on_ready(self):
 
         logger.info(
@@ -158,15 +184,7 @@ def main():
             "DISCORD_TOKEN environment variable is not set."
         )
 
-    # ========================================
-    # Keep Alive
-    # ========================================
-
     start_keep_alive()
-
-    # ========================================
-    # Start Bot
-    # ========================================
 
     bot = DiscordBot()
 
