@@ -1,972 +1,787 @@
 import re
-import unicodedata
-
 import discord
+
 from discord import app_commands
 from discord.ext import commands
 
 from storage import get_guild_config, set_guild_value
 
 
-DEFAULT_TITLE = "🎫 PVPBattles Support"
+# =========================================================
+# 設定
+# =========================================================
 
-DEFAULT_DESCRIPTION = (
+DEFAULT_PANEL_TITLE = "🎫 PVPBattles Support"
+
+DEFAULT_PANEL_DESCRIPTION = (
     "Need help?\n"
     "Click the button below to create a ticket."
 )
 
-DEFAULT_BUTTON_LABEL = "Create Ticket"
-DEFAULT_BUTTON_EMOJI = "🎫"
+DEFAULT_BUTTON_LABEL = "🎫 Create Ticket"
 
-DEFAULT_SUPPORT_CATEGORIES = [
-    {"name": "General Support", "emoji": "🛠️"},
-    {"name": "Player Report", "emoji": "🚨"},
-    {"name": "Bug Report", "emoji": "🐛"},
-    {"name": "Appeal", "emoji": "⚖️"},
-    {"name": "Other", "emoji": "❓"},
-]
+DEFAULT_TICKET_NAME = "ticket-{username}"
 
-TICKET_GREETING = (
+DEFAULT_GREETING = (
     "こんにちは、{user}！\n\n"
     "チケットを作成していただきありがとうございます！\n"
     "至急スタッフが対応いたしますので、ご要件を記入した上でしばらくお待ちください！\n\n"
-    "また、夜間などは対応ができない可能性がございますので、あらかじめご了承ください！"
+    "また、夜間などは対応ができない可能性がございますので、"
+    "あらかじめご了承ください！"
 )
 
-AUTO_REPLY = (
+DEFAULT_FIRST_MESSAGE = (
     "お問い合わせありがとうございます！\n"
-    "スタッフが確認しますので、しばらくお待ちください。"
+    "スタッフが確認しますので、少々お待ちください。"
 )
 
 
-def get_categories(guild_id: int) -> list[dict]:
+# =========================================================
+# Utility
+# =========================================================
+
+def get_ticket_config(guild_id: int) -> dict:
     config = get_guild_config(guild_id)
+    ticket = config.get("ticket", {})
 
-    categories = config.get("ticket_support_categories")
+    if not isinstance(ticket, dict):
+        ticket = {}
 
-    if not isinstance(categories, list) or not categories:
-        return [item.copy() for item in DEFAULT_SUPPORT_CATEGORIES]
-
-    result = []
-
-    for item in categories:
-        if not isinstance(item, dict):
-            continue
-
-        name = str(item.get("name", "")).strip()
-        emoji = str(item.get("emoji", "❓")).strip()
-
-        if name:
-            result.append(
-                {
-                    "name": name[:80],
-                    "emoji": emoji[:10] or "❓",
-                }
-            )
-
-    return result or [
-        item.copy()
-        for item in DEFAULT_SUPPORT_CATEGORIES
-    ]
+    return ticket
 
 
-def clean_channel_name(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text)
+def sanitize_channel_name(name: str) -> str:
+    """
+    Discordチャンネル名用に文字を整形する。
+    """
 
-    text = text.encode(
-        "ascii",
-        "ignore"
-    ).decode("ascii")
+    name = name.lower()
 
-    text = text.lower()
+    # 英数字、ハイフン、アンダーバー以外を削除
+    name = re.sub(r"[^a-z0-9_-]+", "-", name)
 
-    text = re.sub(
-        r"[^a-z0-9_-]+",
-        "-",
-        text
-    )
+    # 連続したハイフンを整理
+    name = re.sub(r"-+", "-", name)
 
-    text = re.sub(
-        r"-{2,}",
-        "-",
-        text
-    )
+    # 前後の記号を整理
+    name = name.strip("-_")
 
-    text = text.strip("-_")
+    if not name:
+        name = "ticket"
 
-    return text[:90] or "ticket"
+    return name[:90]
 
 
-def render_ticket_name(
-    template: str,
-    user: discord.Member
+def replace_ticket_placeholders(
+    text: str,
+    user: discord.Member | discord.User
 ) -> str:
+    """
+    チケット名などのプレースホルダーを置換。
 
-    values = {
-        "username": user.name,
-        "displayname": user.display_name,
-        "userid": str(user.id),
-        "user": user.name,
+    {username}
+    {displayname}
+    {userid}
+    {user}
+    """
+
+    username = user.name
+    displayname = getattr(user, "display_name", user.name)
+    userid = str(user.id)
+
+    replacements = {
+        "{username}": username,
+        "{displayname}": displayname,
+        "{userid}": userid,
+        "{user}": f"<@{user.id}>",
     }
 
-    result = template
+    for key, value in replacements.items():
+        text = text.replace(key, value)
 
-    for key, value in values.items():
-        result = result.replace(
-            "{" + key + "}",
-            value
-        )
-
-    return clean_channel_name(result)
+    return text
 
 
-def get_ticket_name_template(guild_id: int) -> str:
-    config = get_guild_config(guild_id)
+def get_staff_role_ids(ticket_config: dict) -> list[int]:
+    """
+    保存されているスタッフロールIDを取得。
+    """
 
-    return str(
-        config.get(
-            "ticket_name",
-            "ticket-{username}"
-        )
-    )
+    role_ids = ticket_config.get("staff_role_ids", [])
 
-
-def get_staff_role_ids(guild_id: int) -> list[int]:
-    config = get_guild_config(guild_id)
-
-    raw = config.get(
-        "ticket_staff_role_ids",
-        []
-    )
-
-    if not isinstance(raw, list):
+    if not isinstance(role_ids, list):
         return []
 
     result = []
 
-    for role_id in raw:
+    for role_id in role_ids:
         try:
             result.append(int(role_id))
         except (TypeError, ValueError):
-            pass
+            continue
 
     return result
 
 
-def is_staff(
+def member_is_staff(
     member: discord.Member,
-    guild_id: int
+    ticket_config: dict
 ) -> bool:
+    """
+    設定されたスタッフロールのうち、
+    1つでも所持していればスタッフ扱い。
+    """
 
-    role_ids = set(
-        get_staff_role_ids(guild_id)
-    )
+    staff_role_ids = get_staff_role_ids(ticket_config)
 
-    return any(
-        role.id in role_ids
-        for role in member.roles
-    )
+    if not staff_role_ids:
+        return False
 
+    member_role_ids = {role.id for role in member.roles}
 
-def get_panel_settings(
-    guild_id: int
-) -> tuple[str, str, str, str]:
-
-    config = get_guild_config(guild_id)
-
-    title = str(
-        config.get(
-            "ticket_title",
-            DEFAULT_TITLE
-        )
-    )
-
-    description = str(
-        config.get(
-            "ticket_description",
-            DEFAULT_DESCRIPTION
-        )
-    )
-
-    button_label = str(
-        config.get(
-            "ticket_button_label",
-            DEFAULT_BUTTON_LABEL
-        )
-    )
-
-    button_emoji = str(
-        config.get(
-            "ticket_button_emoji",
-            DEFAULT_BUTTON_EMOJI
-        )
-    )
-
-    return (
-        title,
-        description,
-        button_label,
-        button_emoji,
+    return bool(
+        member_role_ids.intersection(staff_role_ids)
     )
 
 
-def make_panel_embed(
-    guild_id: int
-) -> discord.Embed:
+def get_ticket_creator_id(channel: discord.TextChannel) -> int | None:
+    """
+    チケットチャンネルのtopicから作成者IDを取得。
 
-    title, description, _, _ = get_panel_settings(
-        guild_id
+    topic:
+        ticket_creator:123456789
+    """
+
+    topic = channel.topic or ""
+
+    match = re.search(
+        r"ticket_creator:(\d+)",
+        topic
     )
 
-    return discord.Embed(
-        title=title,
-        description=description,
-        color=discord.Color.blurple(),
-    )
+    if not match:
+        return None
 
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def is_ticket_channel(channel: discord.abc.GuildChannel) -> bool:
+    if not isinstance(channel, discord.TextChannel):
+        return False
+
+    topic = channel.topic or ""
+
+    return "ticket_creator:" in topic
+
+
+# =========================================================
+# Ticket Create View
+# =========================================================
 
 class TicketPanelView(discord.ui.View):
+    """
+    チケット作成パネルの永続View。
+    """
 
-    def __init__(
-        self,
-        guild_id: int | None = None
-    ):
+    def __init__(self):
         super().__init__(timeout=None)
 
-        if guild_id is not None:
-            _, _, label, emoji = get_panel_settings(
-                guild_id
-            )
-        else:
-            label = DEFAULT_BUTTON_LABEL
-            emoji = DEFAULT_BUTTON_EMOJI
-
-        self.add_item(
-            TicketCreateButton(
-                label=label,
-                emoji=emoji,
-            )
-        )
-
-
-class TicketCreateButton(discord.ui.Button):
-
-    def __init__(
+    @discord.ui.button(
+        label=DEFAULT_BUTTON_LABEL,
+        style=discord.ButtonStyle.primary,
+        emoji="🎫",
+        custom_id="ticket:create"
+    )
+    async def create_ticket(
         self,
-        label: str = DEFAULT_BUTTON_LABEL,
-        emoji: str = DEFAULT_BUTTON_EMOJI,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
     ):
-
-        super().__init__(
-            style=discord.ButtonStyle.primary,
-            label=(
-                label[:80]
-                or DEFAULT_BUTTON_LABEL
-            ),
-            emoji=(
-                emoji
-                or DEFAULT_BUTTON_EMOJI
-            ),
-            custom_id="ticket:create",
-        )
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        cog = interaction.client.get_cog(
-            "Ticket"
-        )
-
-        if cog is None:
+        if interaction.guild is None:
             await interaction.response.send_message(
-                "❌ Ticket system is unavailable.",
-                ephemeral=True,
+                "❌ このボタンはサーバー内でのみ使用できます。",
+                ephemeral=True
             )
             return
 
-        await cog.create_ticket(
-            interaction
+        guild = interaction.guild
+        user = interaction.user
+
+        if not isinstance(user, discord.Member):
+            await interaction.response.send_message(
+                "❌ メンバー情報を取得できませんでした。",
+                ephemeral=True
+            )
+            return
+
+        ticket_config = get_ticket_config(guild.id)
+
+        category_id = ticket_config.get("category_id")
+
+        if not category_id:
+            await interaction.response.send_message(
+                "❌ チケットカテゴリが設定されていません。\n"
+                "`/ticket-edit` から設定してください。",
+                ephemeral=True
+            )
+            return
+
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
+            await interaction.response.send_message(
+                "❌ チケットカテゴリの設定が壊れています。",
+                ephemeral=True
+            )
+            return
+
+        category = guild.get_channel(category_id)
+
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                "❌ 設定されたチケットカテゴリが見つかりません。",
+                ephemeral=True
+            )
+            return
+
+        # -------------------------------------------------
+        # 既存チケット確認
+        # -------------------------------------------------
+
+        for channel in guild.text_channels:
+            if not is_ticket_channel(channel):
+                continue
+
+            creator_id = get_ticket_creator_id(channel)
+
+            if creator_id == user.id:
+                await interaction.response.send_message(
+                    f"❌ すでにチケットがあります: {channel.mention}",
+                    ephemeral=True
+                )
+                return
+
+        await interaction.response.defer(
+            ephemeral=True
         )
 
+        # -------------------------------------------------
+        # チャンネル名
+        # -------------------------------------------------
+
+        ticket_name_template = ticket_config.get(
+            "ticket_name",
+            DEFAULT_TICKET_NAME
+        )
+
+        if not isinstance(ticket_name_template, str):
+            ticket_name_template = DEFAULT_TICKET_NAME
+
+        channel_name = replace_ticket_placeholders(
+            ticket_name_template,
+            user
+        )
+
+        channel_name = sanitize_channel_name(
+            channel_name
+        )
+
+        # -------------------------------------------------
+        # Permission
+        # -------------------------------------------------
+
+        overwrites = {}
+
+        # @everyone
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=False
+        )
+
+        # チケット作成者
+        overwrites[user] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True
+        )
+
+        # Bot
+        me = guild.me
+
+        if me is not None:
+            overwrites[me] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                manage_channels=True,
+                manage_messages=True,
+                embed_links=True,
+                attach_files=True
+            )
+
+        # スタッフロール
+        staff_role_ids = get_staff_role_ids(
+            ticket_config
+        )
+
+        for role_id in staff_role_ids:
+            role = guild.get_role(role_id)
+
+            if role is None:
+                continue
+
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True
+            )
+
+        # -------------------------------------------------
+        # チャンネル作成
+        # -------------------------------------------------
+
+        try:
+            channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                overwrites=overwrites,
+                topic=f"ticket_creator:{user.id}",
+                reason=f"Ticket created by {user} ({user.id})"
+            )
+
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ チケットチャンネルを作成する権限がありません。",
+                ephemeral=True
+            )
+            return
+
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"❌ チケットの作成に失敗しました。\n"
+                f"`{e}`",
+                ephemeral=True
+            )
+            return
+
+        # -------------------------------------------------
+        # Greeting
+        # -------------------------------------------------
+
+        greeting = ticket_config.get(
+            "greeting",
+            DEFAULT_GREETING
+        )
+
+        if not isinstance(greeting, str):
+            greeting = DEFAULT_GREETING
+
+        greeting = replace_ticket_placeholders(
+            greeting,
+            user
+        )
+
+        # -------------------------------------------------
+        # スタッフロールMention
+        # -------------------------------------------------
+
+        role_mentions = []
+
+        for role_id in staff_role_ids:
+            role = guild.get_role(role_id)
+
+            if role is not None:
+                role_mentions.append(role.mention)
+
+        staff_mentions = ""
+
+        if role_mentions:
+            staff_mentions = (
+                "\n\n"
+                + " ".join(role_mentions)
+            )
+
+        # -------------------------------------------------
+        # Close View
+        # -------------------------------------------------
+
+        embed = discord.Embed(
+            title="🎫 Ticket",
+            description=greeting,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="PVPBattles Support"
+        )
+
+        try:
+            await channel.send(
+                content=staff_mentions if staff_mentions else None,
+                embed=embed,
+                view=TicketCloseView()
+            )
+
+        except discord.HTTPException:
+            # 作成後の送信に失敗した場合、チャンネルを削除
+            try:
+                await channel.delete(
+                    reason="Failed to initialize ticket"
+                )
+            except Exception:
+                pass
+
+            await interaction.followup.send(
+                "❌ チケットの初期メッセージ送信に失敗しました。",
+                ephemeral=True
+            )
+            return
+
+        # -------------------------------------------------
+        # 作成完了
+        # -------------------------------------------------
+
+        await interaction.followup.send(
+            f"✅ チケットを作成しました！\n{channel.mention}",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# Ticket Close View
+# =========================================================
 
 class TicketCloseView(discord.ui.View):
+    """
+    チケット閉じるボタンの永続View。
+    """
 
     def __init__(self):
         super().__init__(timeout=None)
 
-        self.add_item(
-            TicketCloseButton()
-        )
-
-
-class TicketCloseButton(discord.ui.Button):
-
-    def __init__(self):
-
-        super().__init__(
-            style=discord.ButtonStyle.danger,
-            label="Close Ticket",
-            emoji="🔒",
-            custom_id="ticket:close",
-        )
-
-    async def callback(
+    @discord.ui.button(
+        label="Close Ticket",
+        style=discord.ButtonStyle.danger,
+        emoji="🔒",
+        custom_id="ticket:close"
+    )
+    async def close_ticket(
         self,
-        interaction: discord.Interaction
+        interaction: discord.Interaction,
+        button: discord.ui.Button
     ):
-
-        if (
-            not interaction.guild
-            or not isinstance(
-                interaction.user,
-                discord.Member
-            )
-        ):
+        if interaction.guild is None:
             await interaction.response.send_message(
-                "❌ This button can only be used in a server.",
-                ephemeral=True,
-            )
-            return
-
-        if not is_staff(
-            interaction.user,
-            interaction.guild.id
-        ):
-            await interaction.response.send_message(
-                "❌ Only staff members can close this ticket.",
-                ephemeral=True,
+                "❌ サーバー内でのみ使用できます。",
+                ephemeral=True
             )
             return
 
         channel = interaction.channel
 
-        if not isinstance(
-            channel,
-            discord.TextChannel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ このチャンネルでは使用できません。",
+                ephemeral=True
+            )
+            return
+
+        if not is_ticket_channel(channel):
+            await interaction.response.send_message(
+                "❌ このチャンネルはチケットではありません。",
+                ephemeral=True
+            )
+            return
+
+        user = interaction.user
+
+        if not isinstance(user, discord.Member):
+            await interaction.response.send_message(
+                "❌ メンバー情報を取得できませんでした。",
+                ephemeral=True
+            )
+            return
+
+        ticket_config = get_ticket_config(
+            interaction.guild.id
+        )
+
+        # -------------------------------------------------
+        # チケット作成者はClose不可
+        # -------------------------------------------------
+
+        creator_id = get_ticket_creator_id(channel)
+
+        if creator_id == user.id:
+            await interaction.response.send_message(
+                "❌ チケット作成者はこのチケットを閉じることができません。",
+                ephemeral=True
+            )
+            return
+
+        # -------------------------------------------------
+        # スタッフ判定
+        # -------------------------------------------------
+
+        if not member_is_staff(
+            user,
+            ticket_config
         ):
             await interaction.response.send_message(
-                "❌ This is not a ticket channel.",
-                ephemeral=True,
+                "❌ Only staff members can close this ticket.",
+                ephemeral=True
             )
             return
 
         await interaction.response.send_message(
-            "🔒 Ticket will be closed.",
-            ephemeral=True,
+            "🗑️ チケットを閉じています...",
+            ephemeral=True
         )
 
         try:
             await channel.delete(
-                reason=(
-                    f"Ticket closed by "
-                    f"{interaction.user}"
-                )
+                reason=f"Ticket closed by {user} ({user.id})"
             )
-        except discord.HTTPException:
-            pass
-
-
-class SupportSelect(discord.ui.Select):
-
-    def __init__(
-        self,
-        categories: list[dict]
-    ):
-
-        options = []
-
-        for index, item in enumerate(
-            categories[:25]
-        ):
-
-            emoji = item.get(
-                "emoji"
-            ) or "❓"
-
+        except discord.Forbidden:
+            # 既にinteractionは返しているためfollowup
             try:
-                option = discord.SelectOption(
-                    label=item["name"][:100],
-                    value=str(index),
-                    emoji=emoji,
+                await interaction.followup.send(
+                    "❌ チャンネルを削除する権限がありません。",
+                    ephemeral=True
                 )
-            except (
-                discord.HTTPException,
-                ValueError
-            ):
-                option = discord.SelectOption(
-                    label=item["name"][:100],
-                    value=str(index),
+            except Exception:
+                pass
+
+        except discord.HTTPException as e:
+            try:
+                await interaction.followup.send(
+                    f"❌ チケットの削除に失敗しました。\n`{e}`",
+                    ephemeral=True
                 )
+            except Exception:
+                pass
 
-            options.append(option)
 
-        if not options:
-            options.append(
-                discord.SelectOption(
-                    label="General Support",
-                    value="0",
-                    emoji="🛠️",
-                )
-            )
-
-        super().__init__(
-            placeholder=(
-                "Select a support category..."
-            ),
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="ticket:support",
-        )
-
-        self.categories = categories
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        if not interaction.channel:
-            return
-
-        try:
-            selected_index = int(
-                self.values[0]
-            )
-        except ValueError:
-            await interaction.response.send_message(
-                "❌ Invalid support category.",
-                ephemeral=True,
-            )
-            return
-
-        if selected_index >= len(
-            self.categories
-        ):
-            await interaction.response.send_message(
-                "❌ Invalid support category.",
-                ephemeral=True,
-            )
-            return
-
-        category = self.categories[
-            selected_index
-        ]
-
-        await interaction.response.send_message(
-            f"📌 Category selected: "
-            f"**{category['name']}**",
-            ephemeral=True,
-        )
-
-        try:
-            await interaction.channel.edit(
-                topic=(
-                    f"Support category: "
-                    f"{category['name']}"
-                )
-            )
-        except discord.HTTPException:
-            pass
-
-
-class SupportView(discord.ui.View):
-
-    def __init__(
-        self,
-        categories: list[dict]
-    ):
-
-        super().__init__(timeout=None)
-
-        self.add_item(
-            SupportSelect(categories)
-        )
-
-
-class CategoryManageView(
-    discord.ui.View
-):
-
-    def __init__(
-        self,
-        cog: "Ticket"
-    ):
-
-        super().__init__(
-            timeout=300
-        )
-
-        self.cog = cog
-
-    @discord.ui.button(
-        label="Add Category",
-        emoji="➕",
-        style=discord.ButtonStyle.success,
-    )
-    async def add_category(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-
-        await interaction.response.send_modal(
-            AddCategoryModal(self.cog)
-        )
-
-    @discord.ui.button(
-        label="Remove Category",
-        emoji="➖",
-        style=discord.ButtonStyle.danger,
-    )
-    async def remove_category(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-
-        categories = get_categories(
-            interaction.guild.id
-        )
-
-        if not categories:
-            await interaction.response.send_message(
-                "❌ No categories are configured.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            "削除するカテゴリを選択してください。",
-            view=RemoveCategoryView(
-                self.cog,
-                categories
-            ),
-            ephemeral=True,
-        )
-
-
-class AddCategoryModal(
-    discord.ui.Modal,
-    title="Add Support Category"
-):
-
-    name = discord.ui.TextInput(
-        label="Category name",
-        placeholder="e.g. Partnership",
-        max_length=80,
-    )
-
-    emoji = discord.ui.TextInput(
-        label="Emoji",
-        placeholder="e.g. 🤝",
-        required=False,
-        max_length=10,
-    )
-
-    def __init__(
-        self,
-        cog: "Ticket"
-    ):
-
-        super().__init__()
-
-        self.cog = cog
-
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        categories = get_categories(
-            interaction.guild.id
-        )
-
-        if len(categories) >= 25:
-            await interaction.response.send_message(
-                "❌ You can have up to 25 categories.",
-                ephemeral=True,
-            )
-            return
-
-        name = str(
-            self.name.value
-        ).strip()
-
-        emoji = (
-            str(
-                self.emoji.value
-            ).strip()
-            or "❓"
-        )
-
-        categories.append(
-            {
-                "name": name,
-                "emoji": emoji,
-            }
-        )
-
-        set_guild_value(
-            interaction.guild.id,
-            "ticket_support_categories",
-            categories,
-        )
-
-        await interaction.response.send_message(
-            f"✅ Added **{name}**.",
-            ephemeral=True,
-        )
-
-
-class RemoveCategoryView(
-    discord.ui.View
-):
-
-    def __init__(
-        self,
-        cog: "Ticket",
-        categories: list[dict]
-    ):
-
-        super().__init__(
-            timeout=120
-        )
-
-        options = []
-
-        for index, item in enumerate(
-            categories[:25]
-        ):
-
-            options.append(
-                discord.SelectOption(
-                    label=item["name"][:100],
-                    value=str(index),
-                    emoji=item.get(
-                        "emoji"
-                    ) or "❓",
-                )
-            )
-
-        self.add_item(
-            RemoveCategorySelect(
-                cog,
-                categories,
-                options
-            )
-        )
-
-
-class RemoveCategorySelect(
-    discord.ui.Select
-):
-
-    def __init__(
-        self,
-        cog: "Ticket",
-        categories: list[dict],
-        options: list[discord.SelectOption]
-    ):
-
-        super().__init__(
-            placeholder=(
-                "Select a category to remove..."
-            ),
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-        self.cog = cog
-        self.categories = categories
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        index = int(
-            self.values[0]
-        )
-
-        if index >= len(
-            self.categories
-        ):
-            await interaction.response.send_message(
-                "❌ Invalid category.",
-                ephemeral=True,
-            )
-            return
-
-        removed = self.categories.pop(
-            index
-        )
-
-        if not self.categories:
-            self.categories = [
-                {
-                    "name": "Other",
-                    "emoji": "❓"
-                }
-            ]
-
-        set_guild_value(
-            interaction.guild.id,
-            "ticket_support_categories",
-            self.categories,
-        )
-
-        await interaction.response.send_message(
-            f"✅ Removed **{removed['name']}**.",
-            ephemeral=True,
-        )
-
-
-class TicketMessageModal(
-    discord.ui.Modal,
-    title="Edit Ticket Panel"
-):
-
-    title_input = discord.ui.TextInput(
-        label="Panel title",
-        placeholder=DEFAULT_TITLE,
-        max_length=256,
-        required=True,
-    )
-
-    description_input = discord.ui.TextInput(
-        label="Panel description",
-        placeholder=DEFAULT_DESCRIPTION,
-        style=discord.TextStyle.paragraph,
-        max_length=4000,
-        required=True,
-    )
-
-    button_label_input = discord.ui.TextInput(
-        label="Button label",
-        placeholder=DEFAULT_BUTTON_LABEL,
-        max_length=80,
-        required=True,
-    )
-
-    button_emoji_input = discord.ui.TextInput(
-        label="Button emoji",
-        placeholder=DEFAULT_BUTTON_EMOJI,
-        max_length=10,
-        required=False,
-    )
-
-    def __init__(
-        self,
-        guild_id: int
-    ):
-
-        super().__init__()
-
-        self.guild_id = guild_id
-
-        (
-            title,
-            description,
-            label,
-            emoji
-        ) = get_panel_settings(
-            guild_id
-        )
-
-        self.title_input.default = title
-        self.description_input.default = description
-        self.button_label_input.default = label
-        self.button_emoji_input.default = emoji
-
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_title",
-            str(
-                self.title_input.value
-            ),
-        )
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_description",
-            str(
-                self.description_input.value
-            ),
-        )
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_button_label",
-            str(
-                self.button_label_input.value
-            ),
-        )
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_button_emoji",
-            (
-                str(
-                    self.button_emoji_input.value
-                ).strip()
-                or DEFAULT_BUTTON_EMOJI
-            ),
-        )
-
-        await interaction.response.send_message(
-            "✅ Ticket panel settings have been saved.",
-            ephemeral=True,
-        )
-
-
-class TicketNameModal(
-    discord.ui.Modal,
-    title="Edit Ticket Name"
-):
-
-    name_input = discord.ui.TextInput(
-        label="Ticket channel name",
-        placeholder="ticket-{username}",
-        max_length=100,
-        required=True,
-    )
-
-    def __init__(
-        self,
-        guild_id: int
-    ):
-
-        super().__init__()
-
-        self.guild_id = guild_id
-
-        self.name_input.default = (
-            get_ticket_name_template(
-                guild_id
-            )
-        )
-
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_name",
-            (
-                str(
-                    self.name_input.value
-                ).strip()
-                or "ticket-{username}"
-            ),
-        )
-
-        await interaction.response.send_message(
-            "✅ Ticket name template saved.\n"
-            "Available: `{username}`, `{displayname}`, "
-            "`{userid}`, `{user}`",
-            ephemeral=True,
-        )
-
-
-class StaffRoleSelect(
-    discord.ui.RoleSelect
-):
-
-    def __init__(
-        self,
-        guild_id: int
-    ):
-
-        super().__init__(
-            placeholder="Select staff roles...",
-            min_values=1,
-            max_values=25,
-            custom_id="ticket:staff_roles",
-        )
-
-        self.guild_id = guild_id
-
-    async def callback(
-        self,
-        interaction: discord.Interaction
-    ):
-
-        roles = [
-            role
-            for role in self.values
-            if isinstance(
-                role,
-                discord.Role
-            )
-        ]
-
-        set_guild_value(
-            self.guild_id,
-            "ticket_staff_role_ids",
-            [
-                role.id
-                for role in roles
-            ],
-        )
-
-        mentions = " ".join(
-            role.mention
-            for role in roles
-        )
-
-        await interaction.response.send_message(
-            f"✅ Staff roles saved:\n{mentions}",
-            ephemeral=True,
-        )
-
-
-class StaffRoleView(
-    discord.ui.View
-):
-
-    def __init__(
-        self,
-        guild_id: int
-    ):
-
-        super().__init__(
-            timeout=300
-        )
-
-        self.add_item(
-            StaffRoleSelect(
-                guild_id
-            )
-        )
-
+# =========================================================
+# Ticket Cog
+# =========================================================
 
 class Ticket(commands.Cog):
 
-    def __init__(
-        self,
-        bot: commands.Bot
-    ):
-
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    # =====================================================
+    # /ticket-setup
+    # =====================================================
 
     @app_commands.command(
         name="ticket-setup",
-        description=(
-            "Set up the ticket panel "
-            "and support categories."
-        ),
+        description="チケットパネルを設置します。"
     )
     @app_commands.describe(
-        category=(
-            "Discord cat
+        channel="チケットパネルを設置するチャンネル"
+    )
+    async def ticket_setup(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ サーバー内でのみ使用できます。",
+                ephemeral=True
+            )
+            return
+
+        # 管理者チェック
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ) or not interaction.user.guild_permissions.manage_guild:
+
+            await interaction.response.send_message(
+                "❌ このコマンドを使用するにはサーバー管理権限が必要です。",
+                ephemeral=True
+            )
+            return
+
+        ticket_config = get_ticket_config(
+            interaction.guild.id
+        )
+
+        title = ticket_config.get(
+            "panel_title",
+            DEFAULT_PANEL_TITLE
+        )
+
+        description = ticket_config.get(
+            "panel_description",
+            DEFAULT_PANEL_DESCRIPTION
+        )
+
+        button_label = ticket_config.get(
+            "button_label",
+            DEFAULT_BUTTON_LABEL
+        )
+
+        # -------------------------------------------------
+        # Embed
+        # -------------------------------------------------
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text="PVPBattles Support"
+        )
+
+        try:
+            await channel.send(
+                embed=embed,
+                view=TicketPanelView()
+            )
+
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ 指定されたチャンネルにメッセージを送信する権限がありません。",
+                ephemeral=True
+            )
+            return
+
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                f"❌ チケットパネルの設置に失敗しました。\n`{e}`",
+                ephemeral=True
+            )
+            return
+
+        # ボタンラベルは現在のViewの固定値を使用
+        # 保存設定としても保持
+        if not isinstance(button_label, str):
+            button_label = DEFAULT_BUTTON_LABEL
+
+        set_guild_value(
+            interaction.guild.id,
+            "ticket",
+            {
+                **ticket_config,
+                "panel_channel_id": channel.id,
+                "panel_title": title,
+                "panel_description": description,
+                "button_label": button_label
+            }
+        )
+
+        await interaction.response.send_message(
+            f"✅ チケットパネルを設置しました！\n"
+            f"{channel.mention}",
+            ephemeral=True
+        )
+
+    # =====================================================
+    # /ticket-edit
+    # =====================================================
+
+    @app_commands.command(
+        name="ticket-edit",
+        description="チケットの設定を変更します。"
+    )
+    @app_commands.describe(
+        category="チケットを作成するDiscordカテゴリ",
+        ticket_name="チケット名。{username} {displayname} {userid} {user} が使用できます。"
+    )
+    async def ticket_edit(
+        self,
+        interaction: discord.Interaction,
+        category: discord.CategoryChannel | None = None,
+        ticket_name: str | None = None
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ サーバー内でのみ使用できます。",
+                ephemeral=True
+            )
+            return
+
+        if not isinstance(
+            interaction.user,
+            discord.Member
+        ) or not interaction.user.guild_permissions.manage_guild:
+
+            await interaction.response.send_message(
+                "❌ このコマンドを使用するにはサーバー管理権限が必要です。",
+                ephemeral=True
+            )
+            return
+
+        current = get_ticket_config(
+            interaction.guild.id
+        )
+
+        if category is not None:
+            current["category_id"] = category.id
+
+        if ticket_name is not None:
+            ticket_name = ticket_name.strip()
+
+            if not ticket_name:
+                await interaction.response.send_message(
+                    "❌ チケット名を空にすることはできません。",
+                    ephemeral=True
+                )
+                return
+
+            current["ticket_name"] = ticket_name
+
+        set_guild_value(
+            interaction.guild.id,
+            "ticket",
+            current
+        )
+
+        # -------------------------------------------------
+        # 現在のスタッフロール
+        # -------------------------------------------------
+
+        staff_role_ids = get_staff_role_ids(current)
+
+        staff_roles = []
+
+        for role_id in staff_role_ids:
+            role = interaction.guild.get_role(role_id)
+
+            if role is not None:
+                staff_roles.append(role.mention)
+
+        category_text = "未設定"
+
+        saved_category_id = current.get(
+            "category_id"
+        )
+
+        if saved_category_id:
+            try:
+                saved_category = interaction.guild.get_channel(
+                    int(saved_category_id)
+                )
+
+                if isinstance(
+                    saved_category,
+                    discord.CategoryChannel
+                ):
+                    category_text = saved_category.name
+            except (TypeError, ValueError):
+                pass
+
+        ticket_name_text = current.get(
+  
