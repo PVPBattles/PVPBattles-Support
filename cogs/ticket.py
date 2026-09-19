@@ -12,25 +12,25 @@ logger = logging.getLogger("discord_bot")
 
 
 # =========================================================
-# Default Settings
+# Defaults
 # =========================================================
 
 DEFAULT_TITLE = "🎫 PVPBattles Support"
 
 DEFAULT_DESCRIPTION = (
     "Need help?\n"
-    "Click the button below to create a private support ticket."
+    "Click the button below to create a ticket."
 )
 
-DEFAULT_CREATE_BUTTON_LABEL = "Create Ticket"
-DEFAULT_CREATE_BUTTON_EMOJI = "🎫"
+DEFAULT_CREATE_LABEL = "Create Ticket"
+DEFAULT_CREATE_EMOJI = "🎫"
 
-DEFAULT_CLOSE_BUTTON_LABEL = "Close Ticket"
-DEFAULT_CLOSE_BUTTON_EMOJI = "🔒"
+DEFAULT_CLOSE_LABEL = "Close Ticket"
+DEFAULT_CLOSE_EMOJI = "🔒"
 
 DEFAULT_TICKET_NAME = "ticket-{username}"
 
-DEFAULT_WELCOME_MESSAGE = (
+DEFAULT_WELCOME = (
     "こんにちは、{user}！\n\n"
     "チケットを作成していただきありがとうございます！\n"
     "至急スタッフが対応いたしますので、"
@@ -49,7 +49,7 @@ DEFAULT_COLOR = 0x5865F2
 
 
 # =========================================================
-# Utility
+# Config
 # =========================================================
 
 def get_ticket_config(guild_id: int) -> dict:
@@ -58,12 +58,12 @@ def get_ticket_config(guild_id: int) -> dict:
     defaults = {
         "ticket_title": DEFAULT_TITLE,
         "ticket_description": DEFAULT_DESCRIPTION,
-        "ticket_create_label": DEFAULT_CREATE_BUTTON_LABEL,
-        "ticket_create_emoji": DEFAULT_CREATE_BUTTON_EMOJI,
-        "ticket_close_label": DEFAULT_CLOSE_BUTTON_LABEL,
-        "ticket_close_emoji": DEFAULT_CLOSE_BUTTON_EMOJI,
+        "ticket_create_label": DEFAULT_CREATE_LABEL,
+        "ticket_create_emoji": DEFAULT_CREATE_EMOJI,
+        "ticket_close_label": DEFAULT_CLOSE_LABEL,
+        "ticket_close_emoji": DEFAULT_CLOSE_EMOJI,
         "ticket_name": DEFAULT_TICKET_NAME,
-        "ticket_welcome": DEFAULT_WELCOME_MESSAGE,
+        "ticket_welcome": DEFAULT_WELCOME,
         "ticket_auto_reply": DEFAULT_AUTO_REPLY,
         "ticket_color": DEFAULT_COLOR,
         "ticket_category_id": None,
@@ -79,7 +79,85 @@ def get_ticket_config(guild_id: int) -> dict:
     return config
 
 
-def safe_channel_name(name: str) -> str:
+# =========================================================
+# Utility
+# =========================================================
+
+def clean_emoji(value: str, fallback: str) -> str:
+    """
+    Discordで問題になりやすいVariation Selectorを除去。
+    空の場合はfallback。
+    """
+    value = value.strip()
+    value = value.replace("\ufe0f", "")
+
+    if not value:
+        return fallback
+
+    return value[:10]
+
+
+def parse_color(value: str) -> int:
+    value = value.strip()
+
+    if value.startswith("#"):
+        value = value[1:]
+
+    if value.lower().startswith("0x"):
+        value = value[2:]
+
+    if len(value) != 6:
+        raise ValueError(
+            "Color must contain exactly 6 hexadecimal characters."
+        )
+
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+        raise ValueError(
+            "Invalid hexadecimal color."
+        )
+
+    return int(value, 16)
+
+
+def get_color(config: dict) -> discord.Color:
+    try:
+        return discord.Color(
+            int(config.get("ticket_color", DEFAULT_COLOR))
+        )
+    except Exception:
+        return discord.Color.blurple()
+
+
+def replace_variables(
+    text: str,
+    member: discord.Member
+) -> str:
+
+    replacements = {
+        "{user}": member.mention,
+        "{username}": member.name,
+        "{displayname}": member.display_name,
+        "{userid}": str(member.id)
+    }
+
+    result = text
+
+    for key, value in replacements.items():
+        result = result.replace(key, value)
+
+    return result
+
+
+def make_ticket_name(
+    template: str,
+    member: discord.Member
+) -> str:
+
+    name = replace_variables(
+        template,
+        member
+    )
+
     name = name.lower()
 
     name = re.sub(
@@ -97,67 +175,16 @@ def safe_channel_name(name: str) -> str:
     name = name.strip("-")
 
     if not name:
-        name = "ticket"
+        name = f"ticket-{member.id}"
 
     return name[:100]
 
 
-def replace_ticket_variables(
-    template: str,
-    member: discord.Member
-) -> str:
-
-    replacements = {
-        "{username}": member.name,
-        "{displayname}": member.display_name,
-        "{userid}": str(member.id),
-        "{user}": member.mention
-    }
-
-    result = template
-
-    for key, value in replacements.items():
-        result = result.replace(
-            key,
-            value
-        )
-
-    return result
-
-
-def parse_color(value: str) -> int:
-    value = value.strip()
-
-    if value.startswith("#"):
-        value = value[1:]
-
-    if value.lower().startswith("0x"):
-        value = value[2:]
-
-    if len(value) != 6:
-        raise ValueError(
-            "Color must contain exactly 6 hexadecimal characters."
-        )
-
-    return int(
-        value,
-        16
-    )
-
-
-def make_embed_color(config: dict) -> discord.Color:
-    try:
-        return discord.Color(
-            int(
-                config.get(
-                    "ticket_color",
-                    DEFAULT_COLOR
-                )
-            )
-        )
-
-    except Exception:
-        return discord.Color.blurple()
+def is_staff(
+    member: discord.Member,
+    role: discord.Role
+) -> bool:
+    return role in member.roles
 
 
 # =========================================================
@@ -166,11 +193,18 @@ def make_embed_color(config: dict) -> discord.Color:
 
 class TicketCreateButton(discord.ui.Button):
 
-    def __init__(self):
+    def __init__(
+        self,
+        label: str = DEFAULT_CREATE_LABEL,
+        emoji: str = DEFAULT_CREATE_EMOJI
+    ):
         super().__init__(
             style=discord.ButtonStyle.primary,
-            label=DEFAULT_CREATE_BUTTON_LABEL,
-            emoji=DEFAULT_CREATE_BUTTON_EMOJI,
+            label=label[:80],
+            emoji=clean_emoji(
+                emoji,
+                DEFAULT_CREATE_EMOJI
+            ),
             custom_id="ticket:create"
         )
 
@@ -189,19 +223,14 @@ class TicketCreateButton(discord.ui.Button):
         guild = interaction.guild
         member = interaction.user
 
-        if not isinstance(
-            member,
-            discord.Member
-        ):
+        if not isinstance(member, discord.Member):
             await interaction.response.send_message(
                 "❌ Could not retrieve your member information.",
                 ephemeral=True
             )
             return
 
-        config = get_ticket_config(
-            guild.id
-        )
+        config = get_ticket_config(guild.id)
 
         category_id = config.get(
             "ticket_category_id"
@@ -211,22 +240,15 @@ class TicketCreateButton(discord.ui.Button):
             "ticket_staff_role_id"
         )
 
-        if not category_id:
+        if not category_id or not staff_role_id:
             await interaction.response.send_message(
-                "❌ Ticket category has not been configured.",
-                ephemeral=True
-            )
-            return
-
-        if not staff_role_id:
-            await interaction.response.send_message(
-                "❌ Staff role has not been configured.",
+                "❌ The ticket system has not been configured yet.",
                 ephemeral=True
             )
             return
 
         category = guild.get_channel(
-            category_id
+            int(category_id)
         )
 
         if not isinstance(
@@ -240,7 +262,7 @@ class TicketCreateButton(discord.ui.Button):
             return
 
         staff_role = guild.get_role(
-            staff_role_id
+            int(staff_role_id)
         )
 
         if staff_role is None:
@@ -251,7 +273,7 @@ class TicketCreateButton(discord.ui.Button):
             return
 
         # -------------------------------------------------
-        # Check for existing ticket
+        # Check existing ticket
         # -------------------------------------------------
 
         ticket_channels = config.get(
@@ -265,42 +287,49 @@ class TicketCreateButton(discord.ui.Button):
         ):
             ticket_channels = {}
 
-        for channel_id, ticket_data in ticket_channels.items():
+        for channel_id, data in list(
+            ticket_channels.items()
+        ):
 
-            if not isinstance(
-                ticket_data,
-                dict
-            ):
+            if not isinstance(data, dict):
                 continue
 
-            owner_id = ticket_data.get(
-                "owner_id"
-            )
-
-            if owner_id != member.id:
+            if data.get("owner_id") != member.id:
                 continue
 
-            existing_channel = guild.get_channel(
+            existing = guild.get_channel(
                 int(channel_id)
             )
 
-            if existing_channel is not None:
+            if existing is not None:
                 await interaction.response.send_message(
-                    "❌ You already have an open ticket:\n"
-                    f"{existing_channel.mention}",
+                    f"❌ You already have an open ticket:\n"
+                    f"{existing.mention}",
                     ephemeral=True
                 )
                 return
 
+            # Remove deleted channel from config.
+            ticket_channels.pop(
+                channel_id,
+                None
+            )
+
+        set_guild_value(
+            guild.id,
+            "ticket_channels",
+            ticket_channels
+        )
+
         # -------------------------------------------------
-        # Bot permissions
+        # Bot member
         # -------------------------------------------------
 
         bot_member = guild.me
 
         if bot_member is None:
             await interaction.response.send_message(
-                "❌ Could not retrieve the bot information.",
+                "❌ Could not retrieve the bot member.",
                 ephemeral=True
             )
             return
@@ -309,22 +338,18 @@ class TicketCreateButton(discord.ui.Button):
         # Channel name
         # -------------------------------------------------
 
-        name_template = config.get(
+        template = config.get(
             "ticket_name",
             DEFAULT_TICKET_NAME
         )
 
-        channel_name = replace_ticket_variables(
-            name_template,
+        channel_name = make_ticket_name(
+            template,
             member
         )
 
-        channel_name = safe_channel_name(
-            channel_name
-        )
-
         # -------------------------------------------------
-        # Permission overwrites
+        # Permissions
         # -------------------------------------------------
 
         overwrites = {
@@ -364,7 +389,6 @@ class TicketCreateButton(discord.ui.Button):
         # -------------------------------------------------
 
         try:
-
             channel = await guild.create_text_channel(
                 name=channel_name,
                 category=category,
@@ -379,10 +403,10 @@ class TicketCreateButton(discord.ui.Button):
             )
             return
 
-        except discord.HTTPException as e:
+        except discord.HTTPException as error:
             logger.exception(
                 "Failed to create ticket channel: %s",
-                e
+                error
             )
 
             await interaction.response.send_message(
@@ -392,7 +416,7 @@ class TicketCreateButton(discord.ui.Button):
             return
 
         # -------------------------------------------------
-        # Save ticket information
+        # Save ticket
         # -------------------------------------------------
 
         ticket_channels[str(channel.id)] = {
@@ -411,44 +435,55 @@ class TicketCreateButton(discord.ui.Button):
         # Welcome message
         # -------------------------------------------------
 
-        welcome_template = config.get(
+        welcome = config.get(
             "ticket_welcome",
-            DEFAULT_WELCOME_MESSAGE
+            DEFAULT_WELCOME
         )
 
-        welcome_message = replace_ticket_variables(
-            welcome_template,
+        welcome = replace_variables(
+            welcome,
             member
         )
 
         # -------------------------------------------------
-        # Ticket embed
+        # Ticket Embed
         # -------------------------------------------------
 
         embed = discord.Embed(
             title="🎫 Ticket",
-            description=welcome_message,
-            color=make_embed_color(config)
+            description=welcome,
+            color=get_color(config)
         )
 
         embed.set_footer(
             text=f"{guild.name} • Support"
         )
 
-        try:
+        close_view = TicketCloseView(
+            label=config.get(
+                "ticket_close_label",
+                DEFAULT_CLOSE_LABEL
+            ),
+            emoji=config.get(
+                "ticket_close_emoji",
+                DEFAULT_CLOSE_EMOJI
+            )
+        )
 
+        try:
             await channel.send(
                 content=staff_role.mention,
                 embed=embed,
-                view=TicketCloseView(),
+                view=close_view,
                 allowed_mentions=discord.AllowedMentions(
                     roles=True
                 )
             )
 
-        except Exception:
+        except discord.HTTPException as error:
             logger.exception(
-                "Failed to send initial ticket message."
+                "Failed to send ticket message: %s",
+                error
             )
 
         await interaction.response.send_message(
@@ -464,13 +499,20 @@ class TicketCreateButton(discord.ui.Button):
 
 class TicketPanelView(discord.ui.View):
 
-    def __init__(self):
+    def __init__(
+        self,
+        label: str = DEFAULT_CREATE_LABEL,
+        emoji: str = DEFAULT_CREATE_EMOJI
+    ):
         super().__init__(
             timeout=None
         )
 
         self.add_item(
-            TicketCreateButton()
+            TicketCreateButton(
+                label=label,
+                emoji=emoji
+            )
         )
 
 
@@ -480,11 +522,18 @@ class TicketPanelView(discord.ui.View):
 
 class TicketCloseButton(discord.ui.Button):
 
-    def __init__(self):
+    def __init__(
+        self,
+        label: str = DEFAULT_CLOSE_LABEL,
+        emoji: str = DEFAULT_CLOSE_EMOJI
+    ):
         super().__init__(
             style=discord.ButtonStyle.danger,
-            label=DEFAULT_CLOSE_BUTTON_LABEL,
-            emoji=DEFAULT_CLOSE_BUTTON_EMOJI,
+            label=label[:80],
+            emoji=clean_emoji(
+                emoji,
+                DEFAULT_CLOSE_EMOJI
+            ),
             custom_id="ticket:close"
         )
 
@@ -500,49 +549,12 @@ class TicketCloseButton(discord.ui.Button):
             )
             return
 
-        config = get_ticket_config(
-            interaction.guild.id
-        )
-
-        staff_role_id = config.get(
-            "ticket_staff_role_id"
-        )
-
-        if not staff_role_id:
-            await interaction.response.send_message(
-                "❌ Staff role has not been configured.",
-                ephemeral=True
-            )
-            return
-
-        staff_role = interaction.guild.get_role(
-            staff_role_id
-        )
-
-        if staff_role is None:
-            await interaction.response.send_message(
-                "❌ The configured staff role could not be found.",
-                ephemeral=True
-            )
-            return
-
-        member = interaction.user
-
         if not isinstance(
-            member,
+            interaction.user,
             discord.Member
         ):
             await interaction.response.send_message(
                 "❌ Could not retrieve your member information.",
-                ephemeral=True
-            )
-            return
-
-        # Staff only
-        if staff_role not in member.roles:
-
-            await interaction.response.send_message(
-                "❌ Only staff members can close tickets.",
                 ephemeral=True
             )
             return
@@ -559,12 +571,10 @@ class TicketCloseButton(discord.ui.Button):
             )
             return
 
-        await interaction.response.send_message(
-            "🔒 Closing this ticket...",
-            ephemeral=True
+        config = get_ticket_config(
+            interaction.guild.id
         )
 
-        # Remove from saved ticket list
         ticket_channels = config.get(
             "ticket_channels",
             {}
@@ -575,6 +585,61 @@ class TicketCloseButton(discord.ui.Button):
             dict
         ):
             ticket_channels = {}
+
+        ticket_data = ticket_channels.get(
+            str(channel.id)
+        )
+
+        if not isinstance(
+            ticket_data,
+            dict
+        ):
+            await interaction.response.send_message(
+                "❌ This channel is not registered as a ticket.",
+                ephemeral=True
+            )
+            return
+
+        staff_role_id = ticket_data.get(
+            "staff_role_id"
+        )
+
+        if not staff_role_id:
+            await interaction.response.send_message(
+                "❌ Staff role information is missing.",
+                ephemeral=True
+            )
+            return
+
+        staff_role = interaction.guild.get_role(
+            int(staff_role_id)
+        )
+
+        if staff_role is None:
+            await interaction.response.send_message(
+                "❌ The staff role no longer exists.",
+                ephemeral=True
+            )
+            return
+
+        # -------------------------------------------------
+        # Staff only
+        # -------------------------------------------------
+
+        if not is_staff(
+            interaction.user,
+            staff_role
+        ):
+            await interaction.response.send_message(
+                "❌ Only staff members can close this ticket.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "🔒 Closing this ticket...",
+            ephemeral=True
+        )
 
         ticket_channels.pop(
             str(channel.id),
@@ -588,19 +653,18 @@ class TicketCloseButton(discord.ui.Button):
         )
 
         try:
-
             await channel.delete(
-                reason=f"Ticket closed by {member}"
+                reason=f"Ticket closed by {interaction.user}"
             )
 
         except discord.Forbidden:
             logger.exception(
-                "Could not delete ticket channel."
+                "Missing permission to delete ticket channel."
             )
 
         except discord.HTTPException:
             logger.exception(
-                "Discord error while deleting ticket."
+                "Failed to delete ticket channel."
             )
 
 
@@ -610,66 +674,36 @@ class TicketCloseButton(discord.ui.Button):
 
 class TicketCloseView(discord.ui.View):
 
-    def __init__(self):
+    def __init__(
+        self,
+        label: str = DEFAULT_CLOSE_LABEL,
+        emoji: str = DEFAULT_CLOSE_EMOJI
+    ):
         super().__init__(
             timeout=None
         )
 
         self.add_item(
-            TicketCloseButton()
+            TicketCloseButton(
+                label=label,
+                emoji=emoji
+            )
         )
 
 
 # =========================================================
-# Ticket Edit Modal
+# Panel Edit Modal
 # =========================================================
 
-class TicketEditModal(
-    discord.ui.Modal,
-    title="Edit Ticket Settings"
-):
-
-    title_text = discord.ui.TextInput(
-        label="Panel Title",
-        placeholder="PVPBattles Support",
-        required=True,
-        max_length=256
-    )
-
-    description = discord.ui.TextInput(
-        label="Panel Description",
-        style=discord.TextStyle.paragraph,
-        placeholder="Describe your support system.",
-        required=True,
-        max_length=4000
-    )
-
-    create_label = discord.ui.TextInput(
-        label="Create Button Name",
-        placeholder="Create Ticket",
-        required=True,
-        max_length=80
-    )
-
-    create_emoji = discord.ui.TextInput(
-        label="Create Button Emoji",
-        placeholder="🎫",
-        required=True,
-        max_length=20
-    )
-
-    ticket_name = discord.ui.TextInput(
-        label="Ticket Channel Name",
-        placeholder="ticket-{username}",
-        required=True,
-        max_length=100
-    )
+class TicketEditModal(discord.ui.Modal):
 
     def __init__(
         self,
         guild_id: int
     ):
-        super().__init__()
+        super().__init__(
+            title="Edit Ticket Panel"
+        )
 
         self.guild_id = guild_id
 
@@ -677,29 +711,75 @@ class TicketEditModal(
             guild_id
         )
 
-        self.title_text.default = config.get(
-            "ticket_title",
-            DEFAULT_TITLE
+        self.panel_title = discord.ui.TextInput(
+            label="Panel Title",
+            default=config.get(
+                "ticket_title",
+                DEFAULT_TITLE
+            ),
+            required=True,
+            max_length=256
         )
 
-        self.description.default = config.get(
-            "ticket_description",
-            DEFAULT_DESCRIPTION
+        self.panel_description = discord.ui.TextInput(
+            label="Panel Description",
+            default=config.get(
+                "ticket_description",
+                DEFAULT_DESCRIPTION
+            ),
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=4000
         )
 
-        self.create_label.default = config.get(
-            "ticket_create_label",
-            DEFAULT_CREATE_BUTTON_LABEL
+        self.create_label = discord.ui.TextInput(
+            label="Create Button Name",
+            default=config.get(
+                "ticket_create_label",
+                DEFAULT_CREATE_LABEL
+            ),
+            required=True,
+            max_length=80
         )
 
-        self.create_emoji.default = config.get(
-            "ticket_create_emoji",
-            DEFAULT_CREATE_BUTTON_EMOJI
+        self.create_emoji = discord.ui.TextInput(
+            label="Create Button Emoji",
+            default=config.get(
+                "ticket_create_emoji",
+                DEFAULT_CREATE_EMOJI
+            ),
+            required=True,
+            max_length=20
         )
 
-        self.ticket_name.default = config.get(
-            "ticket_name",
-            DEFAULT_TICKET_NAME
+        self.ticket_name = discord.ui.TextInput(
+            label="Ticket Channel Name",
+            default=config.get(
+                "ticket_name",
+                DEFAULT_TICKET_NAME
+            ),
+            required=True,
+            max_length=100
+        )
+
+        self.add_item(
+            self.panel_title
+        )
+
+        self.add_item(
+            self.panel_description
+        )
+
+        self.add_item(
+            self.create_label
+        )
+
+        self.add_item(
+            self.create_emoji
+        )
+
+        self.add_item(
+            self.ticket_name
         )
 
     async def on_submit(
@@ -707,20 +787,16 @@ class TicketEditModal(
         interaction: discord.Interaction
     ):
 
-        config = get_ticket_config(
-            self.guild_id
-        )
-
         set_guild_value(
             self.guild_id,
             "ticket_title",
-            self.title_text.value
+            self.panel_title.value
         )
 
         set_guild_value(
             self.guild_id,
             "ticket_description",
-            self.description.value
+            self.panel_description.value
         )
 
         set_guild_value(
@@ -741,69 +817,4 @@ class TicketEditModal(
             self.ticket_name.value
         )
 
-        await interaction.response.send_message(
-            "✅ Ticket settings have been saved!\n\n"
-            "Use `/ticket-setup` again to send a new panel.",
-            ephemeral=True
-        )
-
-
-# =========================================================
-# Ticket Cog
-# =========================================================
-
-class Ticket(commands.Cog):
-
-    def __init__(
-        self,
-        bot: commands.Bot
-    ):
-        self.bot = bot
-
-    # =====================================================
-    # /ticket-setup
-    # =====================================================
-
-    @app_commands.command(
-        name="ticket-setup",
-        description="Create the ticket panel."
-    )
-    @app_commands.describe(
-        channel="The channel where the ticket panel will be sent."
-    )
-    @app_commands.default_permissions(
-        manage_guild=True
-    )
-    async def ticket_setup(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel
-    ):
-
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server.",
-                ephemeral=True
-            )
-            return
-
-        config = get_ticket_config(
-            interaction.guild.id
-        )
-
-        if not config.get(
-            "ticket_category_id"
-        ):
-            await interaction.response.send_message(
-                "❌ Ticket category has not been configured.\n"
-                "Use `/ticket-edit` first.",
-                ephemeral=True
-            )
-            return
-
-        if not config.get(
-            "ticket_staff_role_id"
-        ):
-            await interaction.response.send_message(
-                "❌ Staff role has not been configured.\n"
-      
+     
