@@ -26,7 +26,7 @@ class DiscordBot(commands.Bot):
         super().__init__(
             command_prefix="!",
             intents=intents,
-            help_command=None,
+            help_command=None
         )
 
     async def setup_hook(self):
@@ -37,20 +37,31 @@ class DiscordBot(commands.Bot):
             "cogs.mcid",
             "cogs.rule",
             "cogs.ticket",
+            "cogs.youtube",
         ]
+
+        # =========================
+        # Cog読み込み
+        # =========================
 
         for extension in extensions:
             try:
                 await self.load_extension(extension)
+
                 logger.info(
                     "Loaded %s",
                     extension
                 )
+
             except Exception:
                 logger.exception(
                     "Failed to load %s",
                     extension
                 )
+
+        # =========================
+        # Rule Persistent View
+        # =========================
 
         try:
             from cogs.rule import VerifyView
@@ -68,10 +79,14 @@ class DiscordBot(commands.Bot):
                 "Failed to register VerifyView."
             )
 
+        # =========================
+        # Ticket Persistent Views
+        # =========================
+
         try:
             from cogs.ticket import (
                 TicketPanelView,
-                TicketCloseView,
+                TicketCloseView
             )
 
             self.add_view(
@@ -91,6 +106,10 @@ class DiscordBot(commands.Bot):
                 "Failed to register Ticket views."
             )
 
+        # =========================
+        # Slash Command Sync
+        # =========================
+
         guild_id = os.getenv(
             "GUILD_ID"
         )
@@ -103,6 +122,7 @@ class DiscordBot(commands.Bot):
                     id=int(guild_id)
                 )
 
+                # ギルド用にグローバルコマンドをコピー
                 self.tree.copy_global_to(
                     guild=guild
                 )
@@ -114,8 +134,15 @@ class DiscordBot(commands.Bot):
                 logger.info(
                     "Synced %s slash commands to guild %s.",
                     len(synced),
-                    guild_id,
+                    guild_id
                 )
+
+                for command in synced:
+
+                    logger.info(
+                        "Guild command: /%s",
+                        command.name
+                    )
 
             else:
 
@@ -123,25 +150,37 @@ class DiscordBot(commands.Bot):
 
                 logger.info(
                     "Synced %s global slash commands.",
-                    len(synced),
+                    len(synced)
                 )
 
+                for command in synced:
+
+                    logger.info(
+                        "Global command: /%s",
+                        command.name
+                    )
+
         except Exception:
+
             logger.exception(
                 "Failed to sync slash commands."
             )
+
+    # =========================
+    # Bot Ready
+    # =========================
 
     async def on_ready(self):
 
         logger.info(
             "Logged in as %s (ID: %s)",
             self.user,
-            self.user.id,
+            self.user.id
         )
 
         logger.info(
             "Connected to %s server(s).",
-            len(self.guilds),
+            len(self.guilds)
         )
 
 
@@ -152,17 +191,24 @@ def main():
     )
 
     if not token:
+
         raise RuntimeError(
             "DISCORD_TOKEN environment variable is not set."
         )
 
+    # Render用Keep Alive
     start_keep_alive()
 
     bot = DiscordBot()
 
     try:
-        bot.run(token)
+
+        bot.run(
+            token
+        )
+
     except Exception:
+
         logger.exception(
             "Bot stopped unexpectedly."
         )
