@@ -38,30 +38,23 @@ class DiscordBot(commands.Bot):
             "cogs.rule",
             "cogs.ticket",
             "cogs.youtube",
+            "cogs.role",
+            "cogs.embed",
         ]
-
-        # =========================
-        # Cog読み込み
-        # =========================
 
         for extension in extensions:
             try:
                 await self.load_extension(extension)
-
-                logger.info(
-                    "Loaded %s",
-                    extension
-                )
-
+                logger.info("Loaded %s", extension)
             except Exception:
                 logger.exception(
                     "Failed to load %s",
                     extension
                 )
 
-        # =========================
-        # Rule Persistent View
-        # =========================
+        # =============================================
+        # Persistent Views
+        # =============================================
 
         try:
             from cogs.rule import VerifyView
@@ -78,10 +71,6 @@ class DiscordBot(commands.Bot):
             logger.exception(
                 "Failed to register VerifyView."
             )
-
-        # =========================
-        # Ticket Persistent Views
-        # =========================
 
         try:
             from cogs.ticket import (
@@ -106,15 +95,22 @@ class DiscordBot(commands.Bot):
                 "Failed to register Ticket views."
             )
 
-        # =========================
+        # =============================================
         # Slash Command Sync
-        # =========================
+        # =============================================
 
-        guild_id = os.getenv(
-            "GUILD_ID"
-        )
+        guild_id = os.getenv("GUILD_ID")
 
         try:
+
+            # -----------------------------------------
+            # GUILD_IDがある場合
+            # -----------------------------------------
+            # サーバー用コマンドだけを同期。
+            # 以前の古いコマンドが残らないように、
+            # Guild command treeを一度クリアしてから
+            # 現在のコマンドだけをコピーする。
+            # -----------------------------------------
 
             if guild_id:
 
@@ -122,7 +118,12 @@ class DiscordBot(commands.Bot):
                     id=int(guild_id)
                 )
 
-                # ギルド用にグローバルコマンドをコピー
+                # 既存のGuildコマンドをクリア
+                self.tree.clear_commands(
+                    guild=guild
+                )
+
+                # 現在読み込まれているコマンドだけコピー
                 self.tree.copy_global_to(
                     guild=guild
                 )
@@ -138,11 +139,16 @@ class DiscordBot(commands.Bot):
                 )
 
                 for command in synced:
-
                     logger.info(
                         "Guild command: /%s",
                         command.name
                     )
+
+            # -----------------------------------------
+            # GUILD_IDがない場合
+            # -----------------------------------------
+            # グローバル同期
+            # -----------------------------------------
 
             else:
 
@@ -154,21 +160,15 @@ class DiscordBot(commands.Bot):
                 )
 
                 for command in synced:
-
                     logger.info(
                         "Global command: /%s",
                         command.name
                     )
 
         except Exception:
-
             logger.exception(
                 "Failed to sync slash commands."
             )
-
-    # =========================
-    # Bot Ready
-    # =========================
 
     async def on_ready(self):
 
@@ -191,24 +191,20 @@ def main():
     )
 
     if not token:
-
         raise RuntimeError(
             "DISCORD_TOKEN environment variable is not set."
         )
 
-    # Render用Keep Alive
     start_keep_alive()
 
     bot = DiscordBot()
 
     try:
-
         bot.run(
             token
         )
 
     except Exception:
-
         logger.exception(
             "Bot stopped unexpectedly."
         )
