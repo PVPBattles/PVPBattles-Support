@@ -31,6 +31,10 @@ class DiscordBot(commands.Bot):
 
     async def setup_hook(self):
 
+        # =============================================
+        # Cog読み込み
+        # =============================================
+
         extensions = [
             "cogs.welcome",
             "cogs.leave",
@@ -46,6 +50,7 @@ class DiscordBot(commands.Bot):
             try:
                 await self.load_extension(extension)
                 logger.info("Loaded %s", extension)
+
             except Exception:
                 logger.exception(
                     "Failed to load %s",
@@ -104,12 +109,7 @@ class DiscordBot(commands.Bot):
         try:
 
             # -----------------------------------------
-            # GUILD_IDがある場合
-            # -----------------------------------------
-            # サーバー用コマンドだけを同期。
-            # 以前の古いコマンドが残らないように、
-            # Guild command treeを一度クリアしてから
-            # 現在のコマンドだけをコピーする。
+            # GUILD_IDが設定されている場合
             # -----------------------------------------
 
             if guild_id:
@@ -118,15 +118,62 @@ class DiscordBot(commands.Bot):
                     id=int(guild_id)
                 )
 
-                # 既存のGuildコマンドをクリア
+                # -------------------------------------
+                # 現在のコマンドを保存
+                # -------------------------------------
+
+                current_commands = list(
+                    self.tree.get_commands()
+                )
+
+                logger.info(
+                    "Current local commands: %s",
+                    len(current_commands)
+                )
+
+                # -------------------------------------
+                # 古いグローバルコマンドを削除
+                # -------------------------------------
+                #
+                # 過去に登録されたコマンドがDiscord側の
+                # Global Commandとして残っている場合、
+                # Guild Commandと二重に表示されることがある。
+                #
+                # 一度Global Commandを空にして同期する。
+                # -------------------------------------
+
+                self.tree.clear_commands()
+
+                await self.tree.sync()
+
+                logger.info(
+                    "Cleared old global slash commands."
+                )
+
+                # -------------------------------------
+                # 現在のコマンドをTreeへ戻す
+                # -------------------------------------
+
+                for command in current_commands:
+                    self.tree.add_command(
+                        command
+                    )
+
+                # -------------------------------------
+                # Guild用に現在のコマンドだけコピー
+                # -------------------------------------
+
                 self.tree.clear_commands(
                     guild=guild
                 )
 
-                # 現在読み込まれているコマンドだけコピー
                 self.tree.copy_global_to(
                     guild=guild
                 )
+
+                # -------------------------------------
+                # Guildへ同期
+                # -------------------------------------
 
                 synced = await self.tree.sync(
                     guild=guild
@@ -146,8 +193,6 @@ class DiscordBot(commands.Bot):
 
             # -----------------------------------------
             # GUILD_IDがない場合
-            # -----------------------------------------
-            # グローバル同期
             # -----------------------------------------
 
             else:
