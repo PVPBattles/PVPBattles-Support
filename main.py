@@ -7,6 +7,10 @@ from discord.ext import commands
 from keep_alive import start_keep_alive
 
 
+# =========================================================
+# Logging
+# =========================================================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -14,6 +18,10 @@ logging.basicConfig(
 
 logger = logging.getLogger("discord_bot")
 
+
+# =========================================================
+# Bot
+# =========================================================
 
 class DiscordBot(commands.Bot):
 
@@ -29,11 +37,15 @@ class DiscordBot(commands.Bot):
             help_command=None
         )
 
+    # =====================================================
+    # Setup Hook
+    # =====================================================
+
     async def setup_hook(self):
 
-        # =============================================
+        # -------------------------------------------------
         # Cog読み込み
-        # =============================================
+        # -------------------------------------------------
 
         extensions = [
             "cogs.welcome",
@@ -49,7 +61,11 @@ class DiscordBot(commands.Bot):
         for extension in extensions:
             try:
                 await self.load_extension(extension)
-                logger.info("Loaded %s", extension)
+
+                logger.info(
+                    "Loaded %s",
+                    extension
+                )
 
             except Exception:
                 logger.exception(
@@ -57,9 +73,9 @@ class DiscordBot(commands.Bot):
                     extension
                 )
 
-        # =============================================
+        # -------------------------------------------------
         # Persistent Views
-        # =============================================
+        # -------------------------------------------------
 
         try:
             from cogs.rule import VerifyView
@@ -100,120 +116,139 @@ class DiscordBot(commands.Bot):
                 "Failed to register Ticket views."
             )
 
-        # =============================================
+        # -------------------------------------------------
         # Slash Command Sync
-        # =============================================
+        # -------------------------------------------------
 
         guild_id = os.getenv("GUILD_ID")
 
+        if not guild_id:
+            logger.error(
+                "GUILD_ID is not set."
+            )
+
+            logger.error(
+                "Slash commands will NOT be registered globally."
+            )
+
+            return
+
         try:
+            guild_id_int = int(guild_id)
 
-            # -----------------------------------------
-            # GUILD_IDが設定されている場合
-            # -----------------------------------------
+        except ValueError:
+            logger.error(
+                "GUILD_ID is invalid: %s",
+                guild_id
+            )
+            return
 
-            if guild_id:
+        guild = discord.Object(
+            id=guild_id_int
+        )
 
-                guild = discord.Object(
-                    id=int(guild_id)
-                )
+        try:
+            # =============================================
+            # 現在Cogから登録されているコマンドを取得
+            # =============================================
 
-                # -------------------------------------
-                # 現在のコマンドを保存
-                # -------------------------------------
+            commands_to_register = list(
+                self.tree.get_commands()
+            )
 
-                current_commands = list(
-                    self.tree.get_commands()
-                )
+            logger.info(
+                "Found %s local slash commands.",
+                len(commands_to_register)
+            )
 
+            for command in commands_to_register:
                 logger.info(
-                    "Current local commands: %s",
-                    len(current_commands)
+                    "Found command: /%s",
+                    command.name
                 )
 
-                # -------------------------------------
-                # 古いグローバルコマンドを削除
-                # -------------------------------------
-                #
-                # 過去に登録されたコマンドがDiscord側の
-                # Global Commandとして残っている場合、
-                # Guild Commandと二重に表示されることがある。
-                #
-                # 一度Global Commandを空にして同期する。
-                # -------------------------------------
+            # =============================================
+            # IMPORTANT
+            #
+            # Global commandを完全に削除
+            # =============================================
 
-                self.tree.clear_commands()
+            self.tree.clear_commands()
 
-                await self.tree.sync()
+            await self.tree.sync()
 
-                logger.info(
-                    "Cleared old global slash commands."
-                )
+            logger.info(
+                "Global slash commands cleared."
+            )
 
-                # -------------------------------------
-                # 現在のコマンドをTreeへ戻す
-                # -------------------------------------
+            # =============================================
+            # Guild側の古いコマンドを完全削除
+            # =============================================
 
-                for command in current_commands:
-                    self.tree.add_command(
-                        command
-                    )
+            self.tree.clear_commands(
+                guild=guild
+            )
 
-                # -------------------------------------
-                # Guild用に現在のコマンドだけコピー
-                # -------------------------------------
+            await self.tree.sync(
+                guild=guild
+            )
 
-                self.tree.clear_commands(
+            logger.info(
+                "Old guild slash commands cleared."
+            )
+
+            # =============================================
+            # コマンドをGuild専用として直接登録
+            #
+            # copy_global_to() は使用しない
+            # =============================================
+
+            for command in commands_to_register:
+
+                self.tree.add_command(
+                    command,
                     guild=guild
                 )
 
-                self.tree.copy_global_to(
-                    guild=guild
-                )
+            logger.info(
+                "Registered %s commands directly to guild %s.",
+                len(commands_to_register),
+                guild_id
+            )
 
-                # -------------------------------------
-                # Guildへ同期
-                # -------------------------------------
+            # =============================================
+            # Guildへ同期
+            # =============================================
 
-                synced = await self.tree.sync(
-                    guild=guild
-                )
+            synced = await self.tree.sync(
+                guild=guild
+            )
 
+            logger.info(
+                "Successfully synced %s slash commands to guild %s.",
+                len(synced),
+                guild_id
+            )
+
+            # =============================================
+            # 同期されたコマンド一覧
+            # =============================================
+
+            for command in synced:
                 logger.info(
-                    "Synced %s slash commands to guild %s.",
-                    len(synced),
-                    guild_id
+                    "Guild command: /%s",
+                    command.name
                 )
-
-                for command in synced:
-                    logger.info(
-                        "Guild command: /%s",
-                        command.name
-                    )
-
-            # -----------------------------------------
-            # GUILD_IDがない場合
-            # -----------------------------------------
-
-            else:
-
-                synced = await self.tree.sync()
-
-                logger.info(
-                    "Synced %s global slash commands.",
-                    len(synced)
-                )
-
-                for command in synced:
-                    logger.info(
-                        "Global command: /%s",
-                        command.name
-                    )
 
         except Exception:
             logger.exception(
                 "Failed to sync slash commands."
             )
+
+
+    # =====================================================
+    # Ready
+    # =====================================================
 
     async def on_ready(self):
 
@@ -228,6 +263,10 @@ class DiscordBot(commands.Bot):
             len(self.guilds)
         )
 
+
+# =========================================================
+# Main
+# =========================================================
 
 def main():
 
@@ -254,6 +293,10 @@ def main():
             "Bot stopped unexpectedly."
         )
 
+
+# =========================================================
+# Entry Point
+# =========================================================
 
 if __name__ == "__main__":
     main()
